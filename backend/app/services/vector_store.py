@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-import chromadb
-from chromadb.api import ClientAPI
-from chromadb.api.models.Collection import Collection
+try:
+    import chromadb  # type: ignore[import]
+except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+    chromadb = None  # type: ignore[assignment]
+    _CHROMADB_IMPORT_ERROR = exc
+else:  # pragma: no branch
+    _CHROMADB_IMPORT_ERROR = None
+
+if chromadb is not None:  # pragma: no branch - satisfied when dependency installed
+    from chromadb.api import ClientAPI
+    from chromadb.api.models.Collection import Collection
+else:
+    ClientAPI = Collection = Any  # type: ignore[assignment]
 
 
 class VectorStoreService:
@@ -16,6 +26,11 @@ class VectorStoreService:
         persist_directory: str,
         collection_name: str = "chat_messages",
     ) -> None:
+        if chromadb is None:  # pragma: no cover - exercised when dependency missing
+            raise RuntimeError(
+                "ChromaDB is required for search features. Install the 'chromadb' package "
+                "or disable search by setting CHAT_SEARCH_ENABLED=false."
+            ) from _CHROMADB_IMPORT_ERROR
         self._persist_directory = persist_directory
         self._collection_name = collection_name
         self._client: ClientAPI = chromadb.PersistentClient(path=persist_directory)

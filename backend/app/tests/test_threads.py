@@ -12,10 +12,11 @@ if TEST_DB_PATH.exists():
     TEST_DB_PATH.unlink()
 
 os.environ["CHAT_DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH}"
+os.environ.setdefault("CHAT_SEARCH_ENABLED", "false")
 
 from app.main import app  # noqa: E402
 from app.db.session import engine  # noqa: E402
-from app.api.deps import get_chat_service, get_search_index_service  # noqa: E402
+from app.api.deps import get_chat_service, get_optional_search_index_service, get_search_index_service  # noqa: E402
 from app.services.llm import ChatCompletionResult, LLMServiceError, ProviderModelCard  # noqa: E402
 from app.services.search_index import SearchMatch, SearchResultSet  # noqa: E402
 
@@ -134,7 +135,7 @@ class StubSearchIndex:
         return SearchResultSet(
             matches=results,
             best_similarity=1.0 if results else None,
-            similarity_threshold=0.75 if results else None,
+            similarity_threshold=1.0 if results else None,
             best_distance=0.0 if results else None,
             distance_threshold=0.0 if results else None,
             min_similarity=0.3,
@@ -146,6 +147,7 @@ def cleanup_db():
     if TEST_DB_PATH.exists():
         TEST_DB_PATH.unlink(missing_ok=True)
     yield
+    engine.dispose()
     if TEST_DB_PATH.exists():
         TEST_DB_PATH.unlink(missing_ok=True)
 
@@ -155,6 +157,7 @@ def test_thread_crud_flow():
     search_stub = StubSearchIndex()
     app.dependency_overrides[get_chat_service] = lambda: stub
     app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
             create_payload = {"title": "My first thread", "metadata": {"topic": "demo"}}
@@ -227,13 +230,16 @@ def test_thread_crud_flow():
             assert list_resp_after.json()["pagination"]["total"] == 0
     finally:
         app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
         engine.dispose()
 
 
 def test_create_message_llm_failure_returns_502():
     app.dependency_overrides[get_chat_service] = lambda: FailingStubLLM()
-    app.dependency_overrides[get_search_index_service] = lambda: StubSearchIndex()
+    search_stub = StubSearchIndex()
+    app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
             create_resp = client.post("/api/threads", json={"title": "Broken"})
@@ -253,13 +259,16 @@ def test_create_message_llm_failure_returns_502():
             assert stored_message["error_code"] == "LLM failure"
     finally:
         app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
         engine.dispose()
 
 
 def test_list_models_success():
     app.dependency_overrides[get_chat_service] = lambda: SuccessfulStubLLM()
-    app.dependency_overrides[get_search_index_service] = lambda: StubSearchIndex()
+    search_stub = StubSearchIndex()
+    app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
             response = client.get("/api/models")
@@ -269,13 +278,16 @@ def test_list_models_success():
             assert data["cards"][0]["name"] == "Stub Model"
     finally:
         app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
         engine.dispose()
 
 
 def test_list_models_failure_returns_502():
     app.dependency_overrides[get_chat_service] = lambda: FailingStubLLM()
-    app.dependency_overrides[get_search_index_service] = lambda: StubSearchIndex()
+    search_stub = StubSearchIndex()
+    app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
             response = client.get("/api/models")
@@ -283,6 +295,7 @@ def test_list_models_failure_returns_502():
             assert response.json()["detail"] == "LLM failure"
     finally:
         app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
         engine.dispose()
 
@@ -357,6 +370,7 @@ def test_conversation_id_reused_between_messages():
     search_stub = StubSearchIndex()
     app.dependency_overrides[get_chat_service] = lambda: stub
     app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
 
     try:
         with TestClient(app) as client:
@@ -371,6 +385,7 @@ def test_conversation_id_reused_between_messages():
             assert recorded_conversation_ids[1] == "conv-1"
     finally:
         app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
         engine.dispose()
 
@@ -380,6 +395,7 @@ def test_search_threads_filters_by_phrase_and_model():
     search_stub = StubSearchIndex()
     app.dependency_overrides[get_chat_service] = lambda: stub
     app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
             # create first thread and message containing target phrase
@@ -428,6 +444,7 @@ def test_search_threads_filters_by_phrase_and_model():
             assert invalid_resp.status_code == 400
     finally:
         app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
         engine.dispose()
 
@@ -437,6 +454,7 @@ def test_delete_thread_marks_as_deleted():
     search_stub = StubSearchIndex()
     app.dependency_overrides[get_chat_service] = lambda: stub
     app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
             create_resp = client.post("/api/threads", json={"title": "To delete"})
@@ -454,5 +472,6 @@ def test_delete_thread_marks_as_deleted():
             assert detail_resp.status_code == 404
     finally:
         app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
         engine.dispose()

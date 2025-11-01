@@ -104,8 +104,12 @@ def _ensure_thread(
     session: Session,
     thread_id: UUID,
     owner_id: str,
+    *,
+    include_deleted: bool = False,
 ) -> Thread:
     stmt = select(Thread).where(Thread.id == thread_id, Thread.owner_id == owner_id)
+    if not include_deleted:
+        stmt = stmt.where(Thread.is_deleted.is_(False))
     thread = session.exec(stmt).one_or_none()
     if thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
@@ -144,6 +148,8 @@ def list_threads(
         filters.append(Thread.is_deleted.is_(False))
         filters.append(Thread.title.is_not(None))
         filters.append(Thread.title != "")
+        message_thread_ids = select(Message.thread_id)
+        filters.append(Thread.id.in_(message_thread_ids))
 
     total = session.exec(
         select(func.count()).select_from(Thread).where(*filters)
@@ -235,7 +241,7 @@ async def delete_thread(
     user_id: str = Depends(get_current_user_id),
     search_index: SearchIndexService | None = Depends(get_optional_search_index_service),
 ) -> Response:
-    thread = _ensure_thread(session, thread_id, user_id)
+    thread = _ensure_thread(session, thread_id, user_id, include_deleted=True)
     if thread.is_deleted:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     thread.is_deleted = True
@@ -328,13 +334,16 @@ async def _process_message_creation(
     else:
         thread_attributes.pop("model_label", None)
 
+    existing_message_count = session.exec(
+        select(func.count()).select_from(Message).where(Message.thread_id == thread.id)
+    ).one()
     user_text = (payload.text or "").strip()
     if not user_text:
         default_text = "Process as expected."
         payload = payload.model_copy(update={"text": default_text})
         user_text = default_text
 
-    if _should_assign_default_title(thread) and user_text:
+    if user_text and (existing_message_count == 0 or _should_assign_default_title(thread)):
         product_label = _sanitize_title_fragment(model_label_raw or model_name) or _DEFAULT_THREAD_PREFIX
         preview = _sanitize_title_fragment(_truncate(user_text, 32))
         thread.title = f"{product_label}: {preview}"
