@@ -1,0 +1,1 @@
+export { default as GwpChatPageId } from './GwpChatPageId.vue'

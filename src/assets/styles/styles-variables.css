@@ -1,0 +1,29 @@
+:root {
+  --brand_50: #005AFF;
+  --gray_white: #FFFFFF;
+  --gray_0: #F5F7F9;
+  --gray_10: #F2F4F7;
+  --gray_20: #E9EDF2;
+  --gray_30: #DAE0E7;
+  --gray_40: #B2BBC2;
+  --gray_60: #7F8E9A;
+  --gray_80: #495B69;
+  --gray_100: #2D3841;
+  --foreground_foundations: #656D76;
+
+  --orange_text: #F29100;
+  --orange_bg: #FEF4E5;
+  --blue_text: #1192BB;
+  --blue_bg: #E7F4F8;
+  --pink_text: #E33A82;
+  --pink_bg: #FCEBF2;
+  --purple_text: #CE0AFF;
+  --purple_bg: #F6E5FA;
+
+  --error_50: #EC1613;
+
+  --main_font: Roboto;
+
+  --media: only screen;
+  --max_phone_width: 769px;
+}

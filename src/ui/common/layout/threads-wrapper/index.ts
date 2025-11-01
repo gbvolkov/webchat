@@ -1,0 +1,1 @@
+export { default as ThreadsWrapper } from './ThreadsWrapper.vue'

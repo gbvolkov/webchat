@@ -1,0 +1,1 @@
+export { default as GwpChatPage } from './GwpChatPage.vue'

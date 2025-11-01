@@ -1,0 +1,20 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic==1.13.3",
+    "fastapi==0.120.0",
+    "numpy==2.3.4",
+    "psycopg[binary]==3.2.3",
+    "pydantic-settings==2.6.1",
+    "pytest==8.3.3",
+    "python-multipart==0.0.9",
+    "sqlmodel==0.0.22",
+    "uvicorn[standard]==0.32.1",
+    "httpx",
+    "chromadb>=0.5.3",
+    "sentence-transformers>=5.1.2",
+]

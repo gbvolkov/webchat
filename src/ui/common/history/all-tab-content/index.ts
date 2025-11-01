@@ -1,0 +1,1 @@
+export { default as AllTabContent } from './AllTabContent.vue'
