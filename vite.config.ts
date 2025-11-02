@@ -7,6 +7,7 @@ import Components from 'unplugin-vue-components/vite'
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers'
 
 export default defineConfig({
+  base: '/webchat/',
   plugins: [
     vue({
       template: {
@@ -60,5 +61,11 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ['vue'],
+  },
+  server: {
+    allowedHosts: ['gbvolkoff.name'],
+    // makes HMR happy over HTTPS behind a proxy
+    hmr: { protocol: 'wss', host: 'gbvolkoff.name' },
+    origin: 'https://gbvolkoff.name/webchat', // (optional)
   },
 })
