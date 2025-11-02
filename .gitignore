@@ -44,5 +44,6 @@ yarn.lock
 .env.*.local
 
 .chroma
+.*
 
 docs
