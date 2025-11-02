@@ -3,11 +3,17 @@ import { ISendMessageRequest, IModelsResponse, IAttachmentUpload } from '@/domai
 import { useAuthStore } from '@/store/auth-store'
 
 export const ChatApi = {
-    sendMessage(threadId: string, message: string, modelId: string, modelLabel?: string, attachments?: IAttachmentUpload[]) {
+    async sendMessage(threadId: string, message: string, modelId: string, modelLabel?: string, attachments?: IAttachmentUpload[]) {
         const authStore = useAuthStore()
+        await authStore.ensureInitialized()
+        const senderId = authStore.userId
+        if (!senderId) {
+            throw new Error('Unable to determine the current user. Please sign in again.')
+        }
+
         const url = `/threads/${threadId}/messages`
         const data: ISendMessageRequest = {
-            sender_id: authStore.userId,
+            sender_id: senderId,
             sender_type: 'user',
             text: message,
             model: modelId,
@@ -15,20 +21,10 @@ export const ChatApi = {
             attachments,
         }
 
-        return DefaultAPIInstance.post(url, data, {
-            headers: {
-                'X-User-Id': authStore.userId,
-            },
-        })
+        return DefaultAPIInstance.post(url, data)
     },
 
     getModels() {
-        const authStore = useAuthStore()
-
-        return DefaultAPIInstance.get<IModelsResponse>('/models', {
-            headers: {
-                'X-User-Id': authStore.userId,
-            },
-        })
+        return DefaultAPIInstance.get<IModelsResponse>('/models')
     },
 }

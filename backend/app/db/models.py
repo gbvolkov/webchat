@@ -26,6 +26,35 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class User(SQLModel, table=True):
+    """Application user with access and product scopes."""
+
+    __tablename__ = "users"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
+    username: str = Field(max_length=128, unique=True, index=True)
+    email: Optional[str] = Field(default=None, max_length=255, unique=True, index=True)
+    full_name: Optional[str] = Field(default=None, max_length=255)
+    password_hash: str = Field(max_length=255)
+    roles: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
+    allowed_products: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
+    allowed_agents: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
+    token_version: int = Field(default=1)
+    is_active: bool = Field(default=True)
+    last_login_at: Optional[datetime] = Field(default=None, nullable=True)
+    created_at: datetime = Field(default_factory=utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=utcnow, nullable=False)
+
+
 class Thread(SQLModel, table=True):
     """Chat thread owned by an end user."""
 

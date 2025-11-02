@@ -248,7 +248,7 @@ watch(availableModels, () => {
         v-else-if="isEmpty"
         class="ChatPage__placeholder"
     >
-      Привет, {{ authStore.userName }}! Задайте вопрос, и ассистент продолжит разговор.
+      Привет, {{ authStore.displayName }}! Задайте вопрос, и ассистент продолжит разговор.
     </div>
   </Chat>
 </template>
@@ -289,3 +289,4 @@ watch(availableModels, () => {
   color: var(--error_50);
 }
 </style>
+

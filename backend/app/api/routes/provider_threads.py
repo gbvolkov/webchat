@@ -5,8 +5,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 
-from app.api.deps import get_current_user_id, get_session
+from app.api.deps import get_current_user, get_session
 from app.db.models import ProviderThreadState, Thread, utcnow
+from app.schemas.auth import AuthenticatedUser
 from app.schemas.provider_state import ProviderThreadStateRead, ProviderThreadStateUpsert
 
 router = APIRouter(prefix="/provider-threads", tags=["provider-thread-store"])
@@ -25,9 +26,9 @@ def get_provider_thread_state(
     thread_id: UUID,
     provider: str = Query(default="openai-compatible", max_length=64),
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ProviderThreadStateRead:
-    _ensure_thread_owner(session, thread_id, user_id)
+    _ensure_thread_owner(session, thread_id, current_user.user_id)
     stmt = select(ProviderThreadState).where(
         ProviderThreadState.thread_id == thread_id,
         ProviderThreadState.provider == provider,
@@ -43,9 +44,9 @@ def upsert_provider_thread_state(
     thread_id: UUID,
     payload: ProviderThreadStateUpsert,
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ProviderThreadStateRead:
-    _ensure_thread_owner(session, thread_id, user_id)
+    _ensure_thread_owner(session, thread_id, current_user.user_id)
     stmt = select(ProviderThreadState).where(
         ProviderThreadState.thread_id == thread_id,
         ProviderThreadState.provider == payload.provider,

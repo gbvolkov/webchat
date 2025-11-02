@@ -52,7 +52,7 @@ onMounted(loadModels)
       :model-label="defaultModel"
   >
     <div class="ChatPage__placeholder">
-      Привет, {{ authStore.userName }}! Выберите чат из списка слева или создайте новый, чтобы начать беседу.
+      Привет, {{ authStore.displayName }}! Выберите чат из списка слева или создайте новый, чтобы начать беседу.
     </div>
   </Chat>
 </template>
@@ -65,3 +65,4 @@ onMounted(loadModels)
   padding: 48px 0;
 }
 </style>
+

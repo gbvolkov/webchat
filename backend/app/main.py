@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from app.api.routes.auth import router as auth_router
 from app.api.routes.models import router as models_router
 from app.api.routes.provider_threads import router as provider_threads_router
 from app.api.routes.search import router as search_router
@@ -182,3 +183,4 @@ app.include_router(models_router, prefix=settings.api_prefix)
 app.include_router(provider_threads_router, prefix=settings.api_prefix)
 app.include_router(search_router, prefix=settings.api_prefix)
 app.include_router(threads_router, prefix=settings.api_prefix)
+app.include_router(auth_router, prefix=settings.api_prefix)

@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
 from app.api.deps import (
-    get_current_user_id,
+    get_current_user,
     get_search_index_service,
     get_session,
 )
 from app.db.models import Message, Thread
+from app.schemas.auth import AuthenticatedUser
 from app.schemas.search import ThreadSearchRequest, ThreadSearchResponse, ThreadSearchResult
 from app.schemas.thread import ThreadRead
 from app.services.search_index import SearchIndexService
@@ -40,9 +41,10 @@ def _extract_text_sources(thread: Thread) -> Iterable[str]:
 async def search_threads(
     payload: ThreadSearchRequest,
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     search_index: SearchIndexService = Depends(get_search_index_service),
 ) -> ThreadSearchResponse:
+    user_id = current_user.user_id
     phrase = payload.phrase.strip()
     if not phrase:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Search phrase cannot be empty")

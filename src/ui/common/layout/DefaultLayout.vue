@@ -25,7 +25,7 @@ const { isShowMenu, handleToggleMenu } = useShowMenu()
             class="Layout__mobileMenu"
             :whenBurgerClick="handleToggleMenu"
         />
-        <RouterView />
+        <slot />
       </div>
     </div>
   </div>

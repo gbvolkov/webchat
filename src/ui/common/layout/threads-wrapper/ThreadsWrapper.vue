@@ -1,10 +1,12 @@
 <script lang="ts" setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { ThreadsApi } from '@/domain/threads/api'
 import ThreadItem from './ThreadItem.vue'
 import type { ThreadSummary } from '@/domain/threads/types'
+import { useAuthStore } from '@/store/auth-store'
 
 const threadItems = ref<ThreadSummary[]>([])
+const authStore = useAuthStore()
 
 interface Props {
   whenClickItem: (id: string) => void
@@ -15,15 +17,36 @@ interface Props {
 const props = defineProps<Props>()
 
 const fetchThreads = async () => {
+  if (!authStore.hasSession) {
+    threadItems.value = []
+    return
+  }
   try {
     const { data } = await ThreadsApi.getThreads()
     threadItems.value = data.items
   } catch (e) {
-    console.error('Failed to load threads', e)
+    if (authStore.hasSession) {
+      console.error('Failed to load threads', e)
+    }
   }
 }
 
-onMounted(fetchThreads)
+onMounted(() => {
+  if (authStore.hasSession) {
+    void fetchThreads()
+  }
+})
+
+watch(
+  () => authStore.hasSession,
+  (hasSession) => {
+    if (hasSession) {
+      void fetchThreads()
+    } else {
+      threadItems.value = []
+    }
+  },
+)
 
 defineExpose({
   refresh: fetchThreads,

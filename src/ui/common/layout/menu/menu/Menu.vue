@@ -12,11 +12,13 @@ import { Routes } from '@/config/router/routes'
 import { useRoute, useRouter } from 'vue-router'
 import { ThreadsWrapper } from '@/ui/common/layout/threads-wrapper'
 import { EventKeys } from '@/ui/common/layout/menu/types'
+import { useAuthStore } from '@/store/auth-store'
 import { ThreadsApi } from '@/domain/threads/api'
 import { message, Modal } from 'ant-design-vue'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 
 const selectedKey = ref<string>(route.name as string)
 const threadsWrapperRef = ref<InstanceType<typeof ThreadsWrapper> | null>(null)
@@ -81,6 +83,10 @@ const items = reactive<IMenuItem[]>([
 ])
 
 const createNewThread = async () => {
+  if (!authStore.hasSession) {
+    message.warning('Please sign in to start a new chat.')
+    return
+  }
   try {
     const { data } = await ThreadsApi.createThread()
     await threadsWrapperRef.value?.refresh()
@@ -147,6 +153,9 @@ const handleDeleteThread = (id: string) => {
 }
 
 const refreshThreads = () => threadsWrapperRef.value?.refresh()
+const handleLogout = async () => {
+  await authStore.logout()
+}
 
 onMounted(() => {
   window.addEventListener('threads:refresh', refreshThreads)
@@ -195,6 +204,14 @@ onBeforeUnmount(() => {
         :selectedThreadId="selectedThreadId"
         :whenDeleteThread="handleDeleteThread"
     />
+
+    <button
+        class="MenuWrapper__logout"
+        type="button"
+        @click="handleLogout"
+    >
+      Sign out
+    </button>
   </aside>
 </template>
 
@@ -224,5 +241,31 @@ onBeforeUnmount(() => {
     padding: 12px;
     border-bottom: 1px solid var(--gray_20);
   }
+
+  &__logout {
+    width: calc(100% - 24px);
+    margin: 16px 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--gray_20);
+    background: white;
+    color: var(--gray_80);
+    font-family: var(--main_font);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+
+    &:hover {
+      background-color: var(--gray_10);
+      color: var(--gray_100);
+    }
+
+    &:active {
+      background-color: var(--gray_20);
+    }
+  }
 }
 </style>
+
+
+

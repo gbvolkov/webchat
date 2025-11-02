@@ -1,6 +1,6 @@
-Ôªø# GWP Chat Backend
+# GWP Chat Backend
 
-FastAPI implementation of the chat REST API described in `docs/–í–µ–±-—á–∞—Ç_–ª–æ–≥–∏–∫–∞_–±—ç–∫–µ–Ω–¥–∞.pdf`.
+FastAPI implementation of the chat REST API described in `docs/???-???_??????_???????.pdf`.
 
 ## Quick start
 
@@ -48,6 +48,12 @@ Environment variables use the `CHAT_` prefix:
 | `CHAT_EMBEDDING_DEVICE` | `None` | Optional device override passed to SentenceTransformer (e.g. `cuda`). |
 | `CHAT_CHROMA_PERSIST_DIRECTORY` | `./.chroma` | Directory for ChromaDB persistence. |
 | `CHAT_SEARCH_MIN_SIMILARITY` | `0.3` | Minimum cosine similarity for semantic search results. |
+| `CHAT_JWT_SECRET_KEY` | `change-me` | HMAC secret used to sign access and refresh tokens. |
+| `CHAT_JWT_ALGORITHM` | `HS256` | JWT signing algorithm. |
+| `CHAT_ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Access token lifetime (minutes). |
+| `CHAT_REFRESH_TOKEN_EXPIRE_MINUTES` | `10080` | Refresh token lifetime (minutes). |
+| `CHAT_JWT_ISSUER` | `gwp-chat` | Issuer claim asserted in generated tokens. |
+| `CHAT_JWT_AUDIENCE` | `None` | Optional audience claim validated on inbound tokens. |
 
 The frontend retrieves model options from `GET /api/models`, backed by the same OpenAI-compatible service (defaults to `http://127.0.0.1:8080`). You can provide a comma-separated fallback list through `VITE_OPENAI_FALLBACK_MODELS`; its first entry is used when the provider is unavailable or returns an empty set. Supplying `CHAT_LLM_API_BASE` overrides the host/port settings for all provider calls.
 
@@ -55,18 +61,33 @@ Values can be stored in `backend/.env` (ignored by git).
 
 ## REST endpoints
 
-- `POST /api/threads` ‚Äî create a thread for the current user.
-- `GET /api/threads` ‚Äî list threads (pagination: `page`, `limit`; excludes deleted by default).
-- `GET /api/threads/{thread_id}` ‚Äî fetch thread details with the latest messages.
-- `PATCH /api/threads/{thread_id}` ‚Äî update title/summary/metadata or soft-delete flag.
-- `DELETE /api/threads/{thread_id}` ‚Äî soft delete a thread.
-- `GET /api/threads/{thread_id}/messages` ‚Äî paginated messages ordered by `created_at` desc.
-- `POST /api/threads/{thread_id}/messages` ‚Äî enqueue a new message (accepts both `sender_id` and `user_id`).
-- `PATCH /api/threads/{thread_id}/messages/{message_id}` ‚Äî update status or text.
-- `GET /api/models` ‚Äî fetch the list of models exposed by the OpenAI-compatible provider.
-- `GET /api/provider-threads/{thread_id}` ‚Äî retrieve persisted provider state (e.g., conversation id) for a thread.
-- `PUT /api/provider-threads/{thread_id}` ‚Äî upsert provider state for a given thread.
-- `POST /api/search/threads` ‚Äî semantic/regex hybrid search across chats, optionally filtered by model id.
+Every protected endpoint expects an `Authorization: Bearer <access_token>` header issued by the auth service described below.
+
+### Authentication
+
+- `POST /api/auth/register` ñ create the first user (open while the table is empty, then restricted to `admin` users).
+- `POST /api/auth/login` ñ exchange username/password for an access/refresh token pair.
+- `POST /api/auth/refresh` ñ mint a new pair from a valid refresh token.
+- `POST /api/auth/logout` ñ rotate the callerís token version and revoke outstanding tokens.
+- `GET /api/auth/me` ñ fetch the current user profile and permissions.
+
+### Threads & messaging
+
+- `POST /api/threads` ñ create a thread for the authenticated user.
+- `GET /api/threads` ñ list threads (pagination: `page`, `limit`; excludes deleted by default).
+- `GET /api/threads/{thread_id}` ñ fetch thread details with the latest messages.
+- `PATCH /api/threads/{thread_id}` ñ update title/summary/metadata or soft-delete flag.
+- `DELETE /api/threads/{thread_id}` ñ soft delete a thread.
+- `GET /api/threads/{thread_id}/messages` ñ paginated messages ordered by `created_at` desc.
+- `POST /api/threads/{thread_id}/messages` ñ enqueue a new message (accepts both `sender_id` and `user_id`; the backend enforces the callerís identity).
+- `PATCH /api/threads/{thread_id}/messages/{message_id}` ñ update status or text.
+
+### Providers, models, and search
+
+- `GET /api/models` ñ fetch the list of models exposed by the OpenAI-compatible provider.
+- `GET /api/provider-threads/{thread_id}` ñ retrieve persisted provider state (e.g., conversation id) for a thread.
+- `PUT /api/provider-threads/{thread_id}` ñ upsert provider state for a given thread.
+- `POST /api/search/threads` ñ semantic/regex hybrid search across chats, optionally filtered by model id.
 
 ### Vector search index
 
@@ -79,9 +100,11 @@ python -m app.scripts.reindex_search
 
 Ensure the model weights are available (the command downloads them from Hugging Face on first run).
 
-### Auth placeholder
+### Bootstrapping users
 
-The service looks for `X-User-Id` header and falls back to `"1"` for compatibility with the current frontend stub. Replace with a proper auth dependency when ready.
+When the `users` table is empty you can create the first account by calling `POST /api/auth/register`. Subsequent registrations require an authenticated user with the `admin` role. Tokens are signed JWTs (`CHAT_JWT_SECRET_KEY` + `CHAT_JWT_ALGORITHM`); send the access token with every request using the `Authorization: Bearer <token>` header.
+
+User records carry per-product and per-agent allow lists. When thread metadata contains `product_id` or `agent_id`, the backend enforces that the caller is allowed to interact with those resources.
 
 ## Running tests
 

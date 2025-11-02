@@ -61,6 +61,11 @@ VITE_OPENAI_FALLBACK_MODELS=gpt-4o-mini,gpt-4o
 
 The UI embeds the `deep-chat` widget with a custom skin, supports drag-and-drop attachments, and streams assistant responses as they arrive.
 
+### Authentication
+
+The frontend now relies on the backend's JWT endpoints. After booting the backend, you can either hit `POST /api/auth/register` manually (the endpoint remains open until the first account is created) or use the "Create account" toggle on the `/login` screen. Once signed in, tokens are persisted in `localStorage`, refreshed automatically, and attached to every API call via the `Authorization: Bearer` header. Use the "Sign out" action in the sidebar menu to clear the session.
+
+
 ---
 
 ## Backend Quick Start
@@ -208,3 +213,5 @@ If you plan to extend the platform (new integrations, branding updates, enhanced
 ---
 
 **Happy building!** The combination of streaming UI, fully instrumented backend, and modular domain design should make it straightforward to tailor GWP Chat to your organisation’s needs. If you have questions or spot opportunities for improvement, update the docs and open issues so the next person benefits. 
+
+

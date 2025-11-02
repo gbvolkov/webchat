@@ -3,7 +3,7 @@ import 'deep-chat'
 import { ref, onMounted } from 'vue'
 import type { CSSProperties } from 'vue'
 import type { Signals } from 'deep-chat/dist/types/handler'
-import { API_BASE_URL } from '@/api/instance'
+import { API_BASE_URL } from '@/config/api'
 import type { IAttachmentUpload } from '@/domain/chat/api/types'
 import { useAuthStore } from '@/store/auth-store'
 import type { TMessageContent } from './types'
@@ -178,8 +178,14 @@ const sendStreamingMessage = async (
   const controller = new AbortController()
   signals.stopClicked.listener = () => controller.abort()
 
+  await authStore.ensureInitialized()
+  const senderId = authStore.userId
+  if (!senderId) {
+    throw new Error('Unable to determine the current user. Please sign in again.')
+  }
+
   const requestPayload = {
-    sender_id: authStore.userId,
+    sender_id: senderId,
     sender_type: 'user',
     text: textContent,
     model: props.modelId,
@@ -187,12 +193,11 @@ const sendStreamingMessage = async (
     attachments,
   }
 
-  const response = await fetch(`${API_BASE_URL}/threads/${threadId}/messages/stream`, {
+  const response = await authStore.authorizedFetch(`${API_BASE_URL}/threads/${threadId}/messages/stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
-      'X-User-Id': authStore.userId,
     },
     body: JSON.stringify(requestPayload),
     signal: controller.signal,
@@ -546,3 +551,5 @@ const userBubbleStyles: CSSProperties = {
   border: none !important;
 }
 </style>
+
+

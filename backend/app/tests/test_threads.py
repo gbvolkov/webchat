@@ -19,6 +19,9 @@ from app.db.session import engine  # noqa: E402
 from app.api.deps import get_chat_service, get_optional_search_index_service, get_search_index_service  # noqa: E402
 from app.services.llm import ChatCompletionResult, LLMServiceError, ProviderModelCard  # noqa: E402
 from app.services.search_index import SearchMatch, SearchResultSet  # noqa: E402
+from sqlmodel import Session, select  # noqa: E402
+from app.db.models import User  # noqa: E402
+from app.services.auth import AuthService  # noqa: E402
 
 
 class SuccessfulStubLLM:
@@ -152,6 +155,42 @@ def cleanup_db():
         TEST_DB_PATH.unlink(missing_ok=True)
 
 
+TEST_USERNAME = "test-user"
+TEST_PASSWORD = "test-pass"
+TEST_EMAIL = "test@example.com"
+
+
+def authenticate_client(
+    client: TestClient,
+    *,
+    roles: list[str] | None = None,
+    allowed_products: list[str] | None = None,
+    allowed_agents: list[str] | None = None,
+) -> User:
+    auth_service = AuthService()
+    with Session(engine) as db:
+        user = User(
+            username=TEST_USERNAME,
+            email=TEST_EMAIL,
+            password_hash=auth_service.hash_password(TEST_PASSWORD),
+            roles=roles or ["admin"],
+            allowed_products=allowed_products or [],
+            allowed_agents=allowed_agents or [],
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    login_resp = client.post(
+        "/api/auth/login",
+        json={"username": TEST_USERNAME, "password": TEST_PASSWORD},
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    access_token = login_resp.json()["access_token"]
+    client.headers.update({"Authorization": f"Bearer {access_token}"})
+    return user
+
+
 def test_thread_crud_flow():
     stub = SuccessfulStubLLM()
     search_stub = StubSearchIndex()
@@ -160,6 +199,7 @@ def test_thread_crud_flow():
     app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
+            user = authenticate_client(client)
             create_payload = {"title": "My first thread", "metadata": {"topic": "demo"}}
             create_resp = client.post("/api/threads", json=create_payload)
             assert create_resp.status_code == 201, create_resp.text
@@ -181,7 +221,7 @@ def test_thread_crud_flow():
 
             message_payload = {
                 "text": "Hello!",
-                "user_id": "1",
+                "user_id": str(user.id),
                 "model": "stub-model",
                 "model_label": "Stub Model",
             }
@@ -242,11 +282,12 @@ def test_create_message_llm_failure_returns_502():
     app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
+            user = authenticate_client(client)
             create_resp = client.post("/api/threads", json={"title": "Broken"})
             assert create_resp.status_code == 201, create_resp.text
             thread_id = create_resp.json()["id"]
 
-            message_payload = {"text": "Ping", "user_id": "1", "model": "stub-model"}
+            message_payload = {"text": "Ping", "user_id": str(user.id), "model": "stub-model"}
             message_resp = client.post(f"/api/threads/{thread_id}/messages", json=message_payload)
             assert message_resp.status_code == 502
 
@@ -271,6 +312,7 @@ def test_list_models_success():
     app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
+            authenticate_client(client)
             response = client.get("/api/models")
             assert response.status_code == 200
             data = response.json()
@@ -290,6 +332,7 @@ def test_list_models_failure_returns_502():
     app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
+            authenticate_client(client)
             response = client.get("/api/models")
             assert response.status_code == 502
             assert response.json()["detail"] == "LLM failure"
@@ -305,6 +348,7 @@ def test_first_message_sets_default_title():
     app.dependency_overrides[get_chat_service] = lambda: stub
     try:
         with TestClient(app) as client:
+            user = authenticate_client(client)
             create_resp = client.post("/api/threads", json={})
             assert create_resp.status_code == 201
             thread_id = create_resp.json()["id"]
@@ -312,7 +356,7 @@ def test_first_message_sets_default_title():
             question = "How do I configure integration settings for deployment?"
             message_payload = {
                 "text": question,
-                "user_id": "1",
+                "user_id": str(user.id),
                 "model": "stub-model",
                 "model_label": "Stub Model",
             }
@@ -334,6 +378,7 @@ def test_provider_thread_state_upsert_route():
     app.dependency_overrides[get_chat_service] = lambda: stub
     try:
         with TestClient(app) as client:
+            authenticate_client(client)
             create_resp = client.post("/api/threads", json={"title": "Stateful"})
             thread_id = create_resp.json()["id"]
 
@@ -374,10 +419,11 @@ def test_conversation_id_reused_between_messages():
 
     try:
         with TestClient(app) as client:
+            user = authenticate_client(client)
             create_resp = client.post("/api/threads", json={"title": "Conv"})
             thread_id = create_resp.json()["id"]
 
-            message_payload = {"text": "Hi", "user_id": "1", "model": "stub-model"}
+            message_payload = {"text": "Hi", "user_id": str(user.id), "model": "stub-model"}
             client.post(f"/api/threads/{thread_id}/messages", json=message_payload)
             client.post(f"/api/threads/{thread_id}/messages", json=message_payload)
 
@@ -398,12 +444,13 @@ def test_search_threads_filters_by_phrase_and_model():
     app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
+            user = authenticate_client(client)
             # create first thread and message containing target phrase
             create_resp = client.post("/api/threads", json={})
             thread_id = create_resp.json()["id"]
             message_payload = {
                 "text": "Integration settings deployment guide",
-                "user_id": "1",
+                "user_id": str(user.id),
                 "model": "stub-model",
                 "model_label": "Stub Model",
             }
@@ -414,7 +461,7 @@ def test_search_threads_filters_by_phrase_and_model():
             other_thread_id = other_resp.json()["id"]
             other_payload = {
                 "text": "General question",
-                "user_id": "1",
+                "user_id": str(user.id),
                 "model": "stub-model-2",
                 "model_label": "Stub Model 2",
             }
@@ -457,6 +504,7 @@ def test_delete_thread_marks_as_deleted():
     app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
     try:
         with TestClient(app) as client:
+            authenticate_client(client)
             create_resp = client.post("/api/threads", json={"title": "To delete"})
             assert create_resp.status_code == 201
             thread_id = create_resp.json()["id"]

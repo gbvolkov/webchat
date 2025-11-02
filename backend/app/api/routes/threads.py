@@ -14,8 +14,10 @@ from fastapi.responses import StreamingResponse
 from sqlmodel import Session, func, select
 
 from app.api.deps import (
+    ensure_agent_access,
+    ensure_product_access,
     get_chat_service,
-    get_current_user_id,
+    get_current_user,
     get_optional_search_index_service,
     get_session,
 )
@@ -32,6 +34,7 @@ from app.schemas.thread import (
 from app.utils.pagination import build_pagination, clamp_limit
 from app.services.llm import ChatPromptMessage, LLMServiceError, OpenAIChatService
 from app.services.search_index import SearchIndexService
+from app.schemas.auth import AuthenticatedUser
 
 router = APIRouter(prefix="/threads", tags=["threads"])
 
@@ -116,17 +119,53 @@ def _ensure_thread(
     return thread
 
 
+_METADATA_PRODUCT_KEYS = ("product_id", "productId", "product")
+_METADATA_AGENT_KEYS = ("agent_id", "agentId", "agent")
+
+
+def _normalize_metadata_value(value: object) -> str | None:
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    if isinstance(value, dict):
+        candidate = value.get("id") or value.get("value")
+        if isinstance(candidate, str):
+            trimmed = candidate.strip()
+            return trimmed or None
+    return None
+
+
+def _extract_metadata_value(metadata: dict | None, keys: tuple[str, ...]) -> str | None:
+    if not metadata:
+        return None
+    for key in keys:
+        if key not in metadata:
+            continue
+        candidate = _normalize_metadata_value(metadata[key])
+        if candidate:
+            return candidate
+    return None
+
+
+def _enforce_metadata_permissions(user: AuthenticatedUser, metadata: dict | None) -> None:
+    ensure_product_access(user, _extract_metadata_value(metadata, _METADATA_PRODUCT_KEYS))
+    ensure_agent_access(user, _extract_metadata_value(metadata, _METADATA_AGENT_KEYS))
+
+
 @router.post("", response_model=ThreadRead, status_code=status.HTTP_201_CREATED)
 def create_thread(
     payload: ThreadCreate,
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ThreadRead:
+    metadata = payload.metadata or {}
+    _enforce_metadata_permissions(current_user, metadata)
+    user_id = current_user.user_id
     thread = Thread(
         owner_id=user_id,
         title=payload.title,
         summary=payload.summary,
-        attributes=payload.metadata or {},
+        attributes=metadata,
     )
     session.add(thread)
     session.commit()
@@ -140,8 +179,9 @@ def list_threads(
     limit: int = Query(default=None, ge=1),
     include_deleted: bool = Query(default=False),
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ThreadListResponse:
+    user_id = current_user.user_id
     limit = clamp_limit(limit)
     filters = [Thread.owner_id == user_id]
     if not include_deleted:
@@ -174,9 +214,11 @@ def get_thread(
     thread_id: UUID,
     messages_limit: int = Query(default=5, ge=1, le=50),
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ThreadDetail:
+    user_id = current_user.user_id
     thread = _ensure_thread(session, thread_id, user_id)
+    _enforce_metadata_permissions(current_user, thread.attributes)
     message_stmt = (
         select(Message)
         .where(Message.thread_id == thread_id)
@@ -202,9 +244,11 @@ def update_thread(
     thread_id: UUID,
     payload: ThreadUpdate,
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ThreadRead:
+    user_id = current_user.user_id
     thread = _ensure_thread(session, thread_id, user_id)
+    _enforce_metadata_permissions(current_user, thread.attributes)
     updated = False
 
     if payload.title is not None:
@@ -214,6 +258,7 @@ def update_thread(
         thread.summary = payload.summary
         updated = True
     if payload.metadata is not None:
+        _enforce_metadata_permissions(current_user, payload.metadata)
         thread.attributes = payload.metadata
         updated = True
     if payload.is_deleted is not None:
@@ -238,10 +283,12 @@ def update_thread(
 async def delete_thread(
     thread_id: UUID,
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     search_index: SearchIndexService | None = Depends(get_optional_search_index_service),
 ) -> Response:
+    user_id = current_user.user_id
     thread = _ensure_thread(session, thread_id, user_id, include_deleted=True)
+    _enforce_metadata_permissions(current_user, thread.attributes)
     if thread.is_deleted:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     thread.is_deleted = True
@@ -265,9 +312,11 @@ def list_messages(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=None, ge=1),
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PaginatedResponse[MessageRead]:
-    _ensure_thread(session, thread_id, user_id)
+    user_id = current_user.user_id
+    thread = _ensure_thread(session, thread_id, user_id)
+    _enforce_metadata_permissions(current_user, thread.attributes)
     limit = clamp_limit(limit)
 
     base_filters = [Message.thread_id == thread_id]
@@ -645,11 +694,14 @@ async def create_message(
     thread_id: UUID,
     payload: MessageCreate,
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     chat_service: OpenAIChatService = Depends(get_chat_service),
     search_index: SearchIndexService | None = Depends(get_optional_search_index_service),
 ) -> MessageRead:
+    user_id = current_user.user_id
     thread = _ensure_thread(session, thread_id, user_id)
+    _enforce_metadata_permissions(current_user, thread.attributes)
+    payload = payload.model_copy(update={"sender_id": user_id})
     return await _process_message_creation(
         thread=thread,
         payload=payload,
@@ -668,11 +720,14 @@ async def stream_message(
     thread_id: UUID,
     payload: MessageCreate,
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     chat_service: OpenAIChatService = Depends(get_chat_service),
     search_index: SearchIndexService | None = Depends(get_optional_search_index_service),
 ) -> StreamingResponse:
+    user_id = current_user.user_id
     thread = _ensure_thread(session, thread_id, user_id)
+    _enforce_metadata_permissions(current_user, thread.attributes)
+    payload = payload.model_copy(update={"sender_id": user_id})
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     last_status: dict[str, str | None] = {"value": None}
 
@@ -798,9 +853,11 @@ def update_message(
     message_id: UUID,
     payload: MessageUpdate,
     session: Session = Depends(get_session),
-    user_id: str = Depends(get_current_user_id),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> MessageRead:
-    _ensure_thread(session, thread_id, user_id)
+    user_id = current_user.user_id
+    thread = _ensure_thread(session, thread_id, user_id)
+    _enforce_metadata_permissions(current_user, thread.attributes)
     stmt = select(Message).where(Message.id == message_id, Message.thread_id == thread_id)
     message = session.exec(stmt).one_or_none()
     if message is None:
