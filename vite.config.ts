@@ -63,9 +63,9 @@ export default defineConfig({
     exclude: ['vue'],
   },
   server: {
-    allowedHosts: ['gbvolkoff.name'],
+    allowedHosts: ['gbvolkoff.name', 'agents.gbvolkoff.name'],
     // makes HMR happy over HTTPS behind a proxy
-    hmr: { protocol: 'wss', host: 'gbvolkoff.name' },
-    origin: 'https://gbvolkoff.name/webchat', // (optional)
+    hmr: { protocol: 'wss', host: 'agents.gbvolkoff.name' },
+    origin: 'https://agents.gbvolkoff.name:8443/webchat', // (optional)
   },
 })
