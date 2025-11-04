@@ -1,4 +1,4 @@
-export enum ChatHistoryTab {
+﻿export enum ChatHistoryTab {
     All= 'All',
     Documents= 'Documents',
     CreativeProcesses= 'CreativeProcesses',
@@ -6,8 +6,8 @@ export enum ChatHistoryTab {
 }
 
 export const CHAT_HISTORY_TABS: Record<ChatHistoryTab, string> = {
-    [ChatHistoryTab.All]: 'Все чаты',
-    [ChatHistoryTab.Documents]: 'Документы и отчеты',
-    [ChatHistoryTab.CreativeProcesses]: 'Креативные процессы',
-    [ChatHistoryTab.Products]: 'Продукты',
+    [ChatHistoryTab.All]: 'pages.chatsHistory.tabs.all',
+    [ChatHistoryTab.Documents]: 'pages.chatsHistory.tabs.documents',
+    [ChatHistoryTab.CreativeProcesses]: 'pages.chatsHistory.tabs.creative',
+    [ChatHistoryTab.Products]: 'pages.chatsHistory.tabs.products',
 }

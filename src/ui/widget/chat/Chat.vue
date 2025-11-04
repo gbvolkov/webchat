@@ -1,12 +1,13 @@
-<script lang="ts" setup>
+﻿<script lang="ts" setup>
 import 'deep-chat'
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import type { CSSProperties } from 'vue'
 import type { Signals } from 'deep-chat/dist/types/handler'
 import { API_BASE_URL } from '@/config/api'
 import type { IAttachmentUpload } from '@/domain/chat/api/types'
 import { useAuthStore } from '@/store/auth-store'
 import type { TMessageContent } from './types'
+import { useI18n } from 'vue-i18n'
 
 interface Props {
   history: TMessageContent[]
@@ -24,7 +25,23 @@ const emit = defineEmits<{
 
 const chatElementRef = ref<any>(null)
 const authStore = useAuthStore()
-const STREAM_ERROR_MESSAGE = 'Error, please try again.'
+const { t, locale } = useI18n()
+
+const textInputPlaceholder = computed(() => {
+  void locale.value
+  return t('chat.input.placeholder')
+})
+
+const attachmentsButtonLabel = computed(() => {
+  void locale.value
+  return t('chat.input.attachments')
+})
+
+const streamErrorMessage = computed(() => {
+  void locale.value
+  return t('chat.errors.stream')
+})
+
 
 const readFileAsBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -181,7 +198,7 @@ const sendStreamingMessage = async (
   await authStore.ensureInitialized()
   const senderId = authStore.userId
   if (!senderId) {
-    throw new Error('Unable to determine the current user. Please sign in again.')
+    throw new Error(t('chat.errors.unauthorized'))
   }
 
   const requestPayload = {
@@ -204,7 +221,7 @@ const sendStreamingMessage = async (
   })
 
   if (!response.ok) {
-    let message = STREAM_ERROR_MESSAGE
+    let message = streamErrorMessage.value
     try {
       const errorPayload = await response.json()
       const detail = errorPayload?.detail ?? errorPayload?.error?.message
@@ -219,7 +236,7 @@ const sendStreamingMessage = async (
 
   const bodyStream = response.body
   if (!bodyStream) {
-    throw new Error(STREAM_ERROR_MESSAGE)
+    throw new Error(streamErrorMessage.value)
   }
 
   const reader = bodyStream.getReader()
@@ -281,8 +298,8 @@ const sendStreamingMessage = async (
     if (payload.error && typeof payload.error === 'object') {
       const message =
         typeof payload.error.message === 'string' && payload.error.message.trim().length > 0
-          ? payload.error.message
-          : STREAM_ERROR_MESSAGE
+            ? payload.error.message
+            : streamErrorMessage.value
       throw new Error(message)
     }
 
@@ -440,7 +457,7 @@ const defineConnectFn = () => {
           typeof error.message === 'string' &&
           error.message.trim().length > 0
             ? error.message
-            : STREAM_ERROR_MESSAGE
+            : streamErrorMessage.value
         await signals.onResponse({ error: message })
         shouldEmitSent = false
       } finally {
@@ -508,7 +525,7 @@ const userBubbleStyles: CSSProperties = {
         text: textInputStyles,
       },
       placeholder: {
-        text: 'Напишите сообщение...',
+        text: textInputPlaceholder,
         style: inputPlaceholderStyle,
       },
       disabled: props.isLoading,
@@ -528,7 +545,7 @@ const userBubbleStyles: CSSProperties = {
         },
       },
     }"
-    :mixedFiles="{ button: { position: 'inside-left', text: 'Файлы' } }"
+    :mixedFiles="{ button: { position: 'inside-left', text: attachmentsButtonLabel } }"
     :messageStyles="{
       default: {
         ai: {
@@ -551,5 +568,7 @@ const userBubbleStyles: CSSProperties = {
   border: none !important;
 }
 </style>
+
+
 
 

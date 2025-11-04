@@ -1,5 +1,6 @@
-<script lang="ts" setup>
+﻿<script lang="ts" setup>
 import { ChatHistoryTab, CHAT_HISTORY_TABS } from './consts'
+import { useI18n } from 'vue-i18n'
 import { entries } from '@/utils/entries'
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const { t } = useI18n()
 </script>
 
 <template>
@@ -19,7 +21,7 @@ const props = defineProps<Props>()
         :key="key"
         @click="() => props.whenTabSelect(key )"
     >
-      {{ tab }}
+      {{ t(tab) }}
     </a-tag>
   </div>
 </template>

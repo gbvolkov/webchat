@@ -39,7 +39,12 @@ const applyAxiosDefaults = (token: string | null) => {
   }
 }
 
-const decodeTokenSubject = (token: string | null): string | null => {
+interface DecodedTokenClaims {
+  sub?: string | null
+  username?: string | null
+}
+
+const decodeTokenClaims = (token: string | null): DecodedTokenClaims | null => {
   if (!token) return null
   const parts = token.split('.')
   if (parts.length < 2) return null
@@ -47,12 +52,23 @@ const decodeTokenSubject = (token: string | null): string | null => {
     const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
     const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=')
     const payloadJson = window.atob(padded)
-    const payload = JSON.parse(payloadJson) as Record<string, unknown>
-    const subject = payload?.sub
-    return typeof subject === 'string' && subject.trim().length > 0 ? subject : null
+    const payload = JSON.parse(payloadJson) as DecodedTokenClaims
+    return payload
   } catch {
     return null
   }
+}
+
+const decodeTokenSubject = (token: string | null): string | null => {
+  const claims = decodeTokenClaims(token)
+  const subject = claims?.sub
+  return typeof subject === 'string' && subject.trim().length > 0 ? subject : null
+}
+
+const decodeTokenUsername = (token: string | null): string | null => {
+  const claims = decodeTokenClaims(token)
+  const username = claims?.username
+  return typeof username === 'string' && username.trim().length > 0 ? username : null
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -366,7 +382,7 @@ export const useAuthStore = defineStore('auth', () => {
     get displayName(): string {
       const fullName = profile.value?.full_name?.trim()
       if (fullName) return fullName
-      return profile.value?.username ?? ''
+      return profile.value?.username ?? decodeTokenUsername(accessTokenRef.value) ?? ''
     },
     get roles(): string[] {
       return profile.value?.roles ?? []

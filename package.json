@@ -44,6 +44,7 @@
     "dayjs": "^1.11.18",
     "deep-chat": "^2.2.2",
     "pinia": "^3.0.3",
+    "vue-i18n": "^9.14.5",
     "vue-router": "^4.5.1"
   },
   "devDependencies": {

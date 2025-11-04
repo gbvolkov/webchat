@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { DefaultLayout } from '@/ui/common/layout'
 import { useAuthStore } from '@/store/auth-store'
 
 const route = useRoute()
 const authStore = useAuthStore()
+const { t } = useI18n()
 
 const useDefaultLayout = computed(() => route.meta?.layout !== 'blank')
 const requiresAuth = computed(() => route.meta?.requiresAuth !== false)
@@ -15,11 +17,12 @@ const isCheckingSession = computed(() => requiresAuth.value && !authStore.isInit
 const statusMessage = computed(() => {
   if (isCheckingSession.value) {
     return authStore.hasRefreshToken
-      ? 'Checking your session…'
-      : 'Preparing sign in screen…'
+      ? t('app.status.checkingSession')
+      : t('app.status.preparingSignIn')
   }
   if (authStore.isAuthenticated) {
-    return `Welcome back, ${authStore.displayName || authStore.userId}!`
+    const name = authStore.displayName || authStore.userId
+    return t('app.status.welcomeBack', { name })
   }
   return ''
 })

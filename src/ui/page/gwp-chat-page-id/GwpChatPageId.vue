@@ -1,5 +1,6 @@
-<script lang="ts" setup>
+﻿<script lang="ts" setup>
 import { onMounted, ref, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { message } from 'ant-design-vue'
 import { isAxiosError } from 'axios'
 import { useAuthStore } from '@/store/auth-store'
@@ -17,6 +18,13 @@ const route = useRoute()
 const componentStatus = ref<ComponentStatus>(ComponentStatus.INITIAL)
 
 const authStore = useAuthStore()
+const { t, locale } = useI18n()
+
+const emptyChatPlaceholder = computed(() => {
+  void locale.value
+  const name = authStore.displayName || authStore.userId
+  return t('pages.chatDetail.placeholders.empty', { name })
+})
 
 const messageHistory = ref<TMessageContent[]>([])
 const threadMetadata = ref<Record<string, unknown>>({})
@@ -86,11 +94,11 @@ const loadModels = async () => {
         .map((id) => ({ id, label: id }))
     } else if (!availableModels.value.length) {
       availableModels.value = cloneFallbackModels()
-      message.warning('Провайдер не вернул список моделей. Используем запасной список.')
+      message.warning(t('pages.chatDetail.errors.fallbackModels'))
     }
   } catch (error) {
     availableModels.value = cloneFallbackModels()
-    message.error('Не удалось загрузить список моделей')
+    message.error(t('pages.chatDetail.errors.loadModels'))
     console.error('Failed to load models', error)
   } finally {
     modelsLoaded.value = true
@@ -179,7 +187,7 @@ const handleModelSelection = async (event: Event) => {
     threadMetadata.value = metadata
   } catch (error) {
     selectedModel.value = previousModel
-    message.error('Не удалось сохранить выбранную модель')
+    message.error(t('pages.chatDetail.errors.updateModel'))
     console.error('Failed to update thread model', error)
   }
 }
@@ -206,7 +214,7 @@ watch(availableModels, () => {
 <template>
   <div class="ChatPage__controls">
     <label class="ChatPage__controlLabel">
-      Модель
+      {{ $t('pages.chatDetail.modelLabel') }}
       <select
           class="ChatPage__select"
           :value="selectedModel"
@@ -236,19 +244,19 @@ watch(availableModels, () => {
         v-if="isLoading && hasLoadedThread"
         class="ChatPage__placeholder"
     >
-      Загружаем историю диалога...
+      {{ $t('pages.chatDetail.placeholders.loading') }}
     </div>
     <div
         v-else-if="hasError"
         class="ChatPage__placeholder ChatPage__placeholder_error"
     >
-      Не удалось загрузить сообщения. Попробуйте перезагрузить страницу.
+      {{ $t('pages.chatDetail.placeholders.loadError') }}
     </div>
     <div
         v-else-if="isEmpty"
         class="ChatPage__placeholder"
     >
-      Привет, {{ authStore.displayName }}! Задайте вопрос, и ассистент продолжит разговор.
+        {{ emptyChatPlaceholder }}
     </div>
   </Chat>
 </template>
@@ -289,4 +297,14 @@ watch(availableModels, () => {
   color: var(--error_50);
 }
 </style>
+
+
+
+
+
+
+
+
+
+
 

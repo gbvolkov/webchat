@@ -1,5 +1,6 @@
 <script setup lang="tsx">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import lupa from '@/assets/icons/search/lupa.svg'
 import TextView from '@/ui/common/text-view/TextView.vue'
 import { Tabs } from '@/ui/common/history/tabs'
@@ -9,9 +10,9 @@ import { ScreenSize, useScreenSize } from '@/composables/useScreenSize'
 import { ITextViewVariant } from '@/ui/common/text-view/types'
 
 const { screenSize } = useScreenSize()
+const { t } = useI18n()
 
 const selectedTab = ref<ChatHistoryTab>(ChatHistoryTab.All)
-
 const search = ref('')
 
 const headerVariant = computed((): ITextViewVariant => {
@@ -25,11 +26,12 @@ const headerVariant = computed((): ITextViewVariant => {
     case ScreenSize.DESKTOP_LARGE:
     default:
       return 'roboto_36_bold'
-
   }
 })
 
-const whenTabSelect = (tab: ChatHistoryTab) => selectedTab.value = tab
+const whenTabSelect = (tab: ChatHistoryTab) => {
+  selectedTab.value = tab
+}
 
 const renderTabContent = computed(() => {
   switch (selectedTab.value) {
@@ -37,8 +39,10 @@ const renderTabContent = computed(() => {
       return (
           <AllTabContent class="HistoryPage__tabsContent" />
       )
-
-    default: return <div class="HistoryPage__tabsContent">В будущем, здесь будет контент...</div>
+    default:
+      return (
+          <div class="HistoryPage__tabsContent">{t('pages.chatsHistory.emptyTab')}</div>
+      )
   }
 })
 </script>
@@ -50,7 +54,7 @@ const renderTabContent = computed(() => {
           :variant="headerVariant"
           class="HistoryPage__header"
       >
-        История чатов
+        {{ $t('pages.chatsHistory.title') }}
       </TextView>
 
       <TextView
@@ -58,18 +62,17 @@ const renderTabContent = computed(() => {
           color="gray_60"
           class="HistoryPage__label"
       >
-        Text description in 2 lines. Text description in 2 lines. Text description in 2 lines
-        Text description in 2 linesText description in 2 lines
+        {{ $t('pages.chatsHistory.subtitle') }}
       </TextView>
 
       <a-input
           v-model:value="search"
-          placeholder="Поиск"
+          :placeholder="$t('pages.chatsHistory.searchPlaceholder')"
           class="HistoryPage__input"
           size="large"
       >
         <template #suffix>
-         <img :src="lupa" alt="Лупа" />
+         <img :src="lupa" :alt="$t('pages.chatsHistory.searchPlaceholder')" />
         </template>
       </a-input>
       <Tabs

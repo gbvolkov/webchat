@@ -1,13 +1,21 @@
-<script lang="ts" setup>
-import { onMounted, ref } from 'vue'
+﻿<script lang="ts" setup>
+import { computed, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { useAuthStore } from '@/store/auth-store'
 import { Chat } from '@/ui/widget/chat'
 import type { TMessageContent } from '@/ui/widget/chat/types'
 import { FALLBACK_DEFAULT_MODEL } from '@/config/llm'
+import { useI18n } from 'vue-i18n'
 import { ChatApi } from '@/domain/chat/api'
 
 const authStore = useAuthStore()
+const { t, locale } = useI18n()
+
+const welcomePlaceholder = computed(() => {
+  void locale.value
+  const name = authStore.displayName || authStore.userId
+  return t('pages.chat.placeholder', { name })
+})
 
 const messageHistory = ref<TMessageContent[]>([])
 const defaultModel = ref<string>(FALLBACK_DEFAULT_MODEL)
@@ -37,7 +45,7 @@ const loadModels = async () => {
     if (!defaultModel.value) {
       defaultModel.value = FALLBACK_DEFAULT_MODEL
     }
-    message.error('Не удалось загрузить список моделей')
+    message.error(t('pages.chat.errors.loadModels'))
     console.error('Failed to load models', error)
   }
 }
@@ -52,7 +60,7 @@ onMounted(loadModels)
       :model-label="defaultModel"
   >
     <div class="ChatPage__placeholder">
-      Привет, {{ authStore.displayName }}! Выберите чат из списка слева или создайте новый, чтобы начать беседу.
+      {{ welcomePlaceholder }}
     </div>
   </Chat>
 </template>
@@ -65,4 +73,9 @@ onMounted(loadModels)
   padding: 48px 0;
 }
 </style>
+
+
+
+
+
 

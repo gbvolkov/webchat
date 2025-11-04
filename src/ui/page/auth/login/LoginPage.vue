@@ -1,5 +1,6 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { reactive, ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute, type RouteLocationRaw } from 'vue-router'
 import { useAuthStore } from '@/store/auth-store'
 import { Routes } from '@/config/router/routes'
@@ -11,6 +12,7 @@ type AuthMode = 'login' | 'register'
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const { t, locale } = useI18n()
 
 const mode = ref<AuthMode>('login')
 const form = reactive({
@@ -27,12 +29,16 @@ const isSubmitting = ref(false)
 const hasRedirected = ref(false)
 
 const isRegisterMode = computed(() => mode.value === 'register')
-const title = computed(() => (isRegisterMode.value ? 'Create account' : 'Sign in'))
+const title = computed(() => {
+  void locale.value
+  return isRegisterMode.value ? t('pages.auth.titles.register') : t('pages.auth.titles.login')
+})
 const submitLabel = computed(() => {
+  void locale.value
   if (isRegisterMode.value) {
-    return isBusy.value ? 'Creating account…' : 'Create account'
+    return isBusy.value ? t('pages.auth.submit.registerInProgress') : t('pages.auth.submit.register')
   }
-  return isBusy.value ? 'Signing in…' : 'Sign in'
+  return isBusy.value ? t('pages.auth.submit.loginInProgress') : t('pages.auth.submit.login')
 })
 
 const isBusy = computed(() => isSubmitting.value || authStore.isAuthenticating)
@@ -132,7 +138,7 @@ const handleSubmit = async (event: Event) => {
 
     if (isRegisterMode.value) {
       if (password !== form.confirmPassword) {
-        errorMessage.value = 'Passwords do not match.'
+        errorMessage.value = t('pages.auth.feedback.passwordsMismatch')
         return
       }
 
@@ -143,7 +149,7 @@ const handleSubmit = async (event: Event) => {
         email: form.email.trim() || undefined,
       })
 
-      infoMessage.value = 'Account created successfully. Signing you in…'
+      infoMessage.value = t('pages.auth.feedback.accountCreated')
 
       await authStore.login({ username, password })
     } else {
@@ -155,8 +161,8 @@ const handleSubmit = async (event: Event) => {
     const message =
       (error as Error)?.message ||
       (isRegisterMode.value
-        ? 'Unable to create the account. Please try again.'
-        : 'Unable to sign in. Please check your credentials and try again.')
+        ? t('pages.auth.feedback.createFailed')
+        : t('pages.auth.feedback.loginFailed'))
     errorMessage.value = message
   } finally {
     isSubmitting.value = false
@@ -195,17 +201,17 @@ watch(
 
       <p class="AuthPage__subtitle">
         <span v-if="isRegisterMode">
-          Already have an account?
-          <button class="AuthPage__link" type="button" @click="switchMode">Sign in</button>
+          {{ $t('pages.auth.subtitles.hasAccount') }}
+          <button class="AuthPage__link" type="button" @click="switchMode"> {{ $t('pages.auth.subtitles.signIn') }} </button>
         </span>
         <span v-else>
-          Need an account?
-          <button class="AuthPage__link" type="button" @click="switchMode">Create one</button>
+          {{ $t('pages.auth.subtitles.needsAccount') }}
+          <button class="AuthPage__link" type="button" @click="switchMode"> {{ $t('pages.auth.subtitles.createOne') }} </button>
         </span>
       </p>
 
       <label class="AuthPage__field">
-        <span class="AuthPage__label">Username</span>
+        <span class="AuthPage__label">{{ $t('pages.auth.fields.username') }}</span>
         <input
           v-model="form.username"
           class="AuthPage__input"
@@ -218,7 +224,7 @@ watch(
       </label>
 
       <label v-if="isRegisterMode" class="AuthPage__field">
-        <span class="AuthPage__label">Full name (optional)</span>
+        <span class="AuthPage__label">{{ $t('pages.auth.fields.fullName') }}</span>
         <input
           v-model="form.fullName"
           class="AuthPage__input"
@@ -230,7 +236,7 @@ watch(
       </label>
 
       <label v-if="isRegisterMode" class="AuthPage__field">
-        <span class="AuthPage__label">Email (optional)</span>
+        <span class="AuthPage__label">{{ $t('pages.auth.fields.email') }}</span>
         <input
           v-model="form.email"
           class="AuthPage__input"
@@ -242,7 +248,7 @@ watch(
       </label>
 
       <label class="AuthPage__field">
-        <span class="AuthPage__label">Password</span>
+        <span class="AuthPage__label">{{ $t('pages.auth.fields.password') }}</span>
         <input
           v-model="form.password"
           class="AuthPage__input"
@@ -256,7 +262,7 @@ watch(
       </label>
 
       <label v-if="isRegisterMode" class="AuthPage__field">
-        <span class="AuthPage__label">Confirm password</span>
+        <span class="AuthPage__label">{{ $t('pages.auth.fields.confirmPassword') }}</span>
         <input
           v-model="form.confirmPassword"
           class="AuthPage__input"
@@ -408,3 +414,9 @@ watch(
   transform: translateY(1px);
 }
 </style>
+
+
+
+
+
+

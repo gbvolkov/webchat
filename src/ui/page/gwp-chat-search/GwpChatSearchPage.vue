@@ -1,5 +1,6 @@
-<script lang="ts" setup>
+﻿<script lang="ts" setup>
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import { ThreadsApi } from '@/domain/threads/api'
@@ -9,6 +10,7 @@ import { FALLBACK_MODELS, type ModelOption } from '@/config/llm'
 import { Routes } from '@/config/router/routes'
 
 const router = useRouter()
+const { t } = useI18n()
 
 const phrase = ref<string>('')
 const selectedModel = ref<string | undefined>(undefined)
@@ -62,7 +64,7 @@ const loadModels = async () => {
 
 const handleSearch = async () => {
   if (!canSearch.value) {
-    message.warning('Введите фразу для поиска')
+    message.warning(t('pages.chatSearch.notifications.phraseRequired'))
     return
   }
 
@@ -86,7 +88,7 @@ const handleSearch = async () => {
     distanceThreshold.value = data.distance_threshold ?? null
     minSimilarity.value = data.min_similarity ?? null
   } catch (error) {
-    message.error('Не удалось выполнить поиск')
+    message.error(t('pages.chatSearch.notifications.searchFailed'))
     console.error('Search error', error)
   } finally {
     isLoading.value = false
@@ -100,19 +102,19 @@ const handleOpenThread = (threadId: string) => {
 
 const handleDeleteThread = (threadId: string) => {
   Modal.confirm({
-    title: 'Удалить чат?',
-    content: 'Чат будет скрыт из списка истории.',
-    okText: 'Удалить',
-    cancelText: 'Отмена',
+    title: t('common.confirmations.deleteChat.title'),
+    content: t('common.confirmations.deleteChat.description'),
+    okText: t('common.confirmations.deleteChat.confirm'),
+    cancelText: t('common.confirmations.deleteChat.cancel'),
     okType: 'danger',
     async onOk() {
       try {
         await ThreadsApi.deleteThread(threadId)
-        message.success('Чат удалён')
+        message.success(t('pages.chatSearch.notifications.deleteSuccess'))
         await handleSearch()
         window.dispatchEvent(new CustomEvent('threads:refresh'))
       } catch (error) {
-        message.error('Не удалось удалить чат')
+        message.error(t('pages.chatSearch.notifications.deleteFailed'))
         console.error('Failed to delete thread from search', error)
       }
     },
@@ -148,30 +150,30 @@ const formatDistance = (value?: number | null) => {
 <template>
   <section class="SearchPage">
     <header class="SearchPage__header">
-      <h1 class="SearchPage__title">Поиск по чатам</h1>
+      <h1 class="SearchPage__title">{{ $t('pages.chatSearch.title') }}</h1>
       <p class="SearchPage__subtitle">
-        Найдите диалоги по ключевой фразе. Фильтр по модели применится, если указать её в списке.
+        {{ $t('pages.chatSearch.subtitle') }}
       </p>
     </header>
 
     <form class="SearchPage__form" @submit.prevent="handleSearch">
       <label class="SearchPage__field">
-        <span>Фраза</span>
+        <span>{{ $t('pages.chatSearch.phraseLabel') }}</span>
         <a-input
             v-model:value="phrase"
-            placeholder="Введите ключевое слово"
+            :placeholder="$t('pages.chatSearch.phrasePlaceholder')"
             allow-clear
             @keyup.enter="handleSearch"
         />
       </label>
 
       <label class="SearchPage__field">
-        <span>Модель</span>
+        <span>{{ $t('pages.chatSearch.modelLabel') }}</span>
         <a-select
         v-model:value="selectedModel"
             :options="availableModels"
             allow-clear
-            placeholder="Все модели"
+            :placeholder="$t('pages.chatSearch.modelPlaceholder')"
             :field-names="{ label: 'label', value: 'id' }"
         />
       </label>
@@ -183,42 +185,42 @@ const formatDistance = (value?: number | null) => {
             :loading="isLoading"
             @click="handleSearch"
         >
-          Найти
+          {{ $t('common.actions.search') }}
         </a-button>
         <a-button
             type="default"
             @click="handleReset"
         >
-          Сбросить
+          {{ $t('common.actions.reset') }}
         </a-button>
       </div>
     </form>
 
     <section class="SearchPage__results">
       <div class="SearchPage__resultsHeader">
-        <span>Результаты</span>
+        <span>{{ $t('pages.chatSearch.results.title') }}</span>
         <span class="SearchPage__resultsCount">
           {{ totalResults }}
         </span>
       </div>
 
       <div v-if="isLoading" class="SearchPage__placeholder">
-        Выполняем поиск...
+        {{ $t('pages.chatSearch.results.loading') }}
       </div>
 
       <div v-else-if="hasSearched && searchResults.length === 0" class="SearchPage__placeholder">
-        Ничего не найдено. Попробуйте уточнить запрос.
+        {{ $t('pages.chatSearch.results.empty') }}
       </div>
 
       <div
           v-if="searchResults.length > 0 && (bestSimilarity !== null || minSimilarity !== null)"
           class="SearchPage__metrics"
       >
-        <span v-if="bestSimilarity !== null">Лучшая схожесть: {{ formatSimilarity(bestSimilarity) }}</span>
-        <span v-if="similarityThreshold !== null">Порог (distance × 1.25): {{ formatSimilarity(similarityThreshold) }}</span>
-        <span v-if="minSimilarity !== null">Минимальная схожесть: {{ formatSimilarity(minSimilarity) }}</span>
-        <span v-if="bestDistance !== null">Лучшая distance: {{ formatDistance(bestDistance) }}</span>
-        <span v-if="distanceThreshold !== null">Порог distance: {{ formatDistance(distanceThreshold) }}</span>
+        <span v-if="bestSimilarity !== null">{{ $t('pages.chatSearch.results.metrics.bestSimilarity', { value: formatSimilarity(bestSimilarity) }) }}</span>
+        <span v-if="similarityThreshold !== null">{{ $t('pages.chatSearch.results.metrics.similarityThreshold', { value: formatSimilarity(similarityThreshold) }) }}</span>
+        <span v-if="minSimilarity !== null">{{ $t('pages.chatSearch.results.metrics.minSimilarity', { value: formatSimilarity(minSimilarity) }) }}</span>
+        <span v-if="bestDistance !== null">{{ $t('pages.chatSearch.results.metrics.bestDistance', { value: formatDistance(bestDistance) }) }}</span>
+        <span v-if="distanceThreshold !== null">{{ $t('pages.chatSearch.results.metrics.distanceThreshold', { value: formatDistance(distanceThreshold) }) }}</span>
       </div>
 
       <ul v-if="searchResults.length > 0" class="SearchPage__list">
@@ -229,23 +231,17 @@ const formatDistance = (value?: number | null) => {
         >
           <div class="SearchPage__listContent" @click="handleOpenThread(result.thread.id)">
             <div class="SearchPage__listTitle">
-              {{ result.thread.title || 'Без названия' }}
+              {{ result.thread.title || ('pages.chatSearch.results.card.untitled') }}
             </div>
-            <div class="SearchPage__listMeta">
-              Модель: {{ result.thread.metadata?.model_label || result.thread.metadata?.model || 'не указана' }}
-            </div>
-            <div class="SearchPage__listMeta SearchPage__listMeta_secondary">
-              Схожесть: {{ formatSimilarity(result.similarity) }}
-            </div>
+            <div class="SearchPage__listMeta">`n                {{ $t('pages.chatSearch.results.card.model', { label: result.thread.metadata?.model_label || result.thread.metadata?.model || $t('pages.chatSearch.results.card.modelUnknown') }) }}`n              </div>
+            <div class="SearchPage__listMeta SearchPage__listMeta_secondary">`n                {{ $t('pages.chatSearch.results.card.similarity', { value: formatSimilarity(result.similarity) }) }}`n              </div>
           </div>
           <a-button
               type="link"
               danger
               class="SearchPage__delete"
               @click.stop="handleDeleteThread(result.thread.id)"
-          >
-            Удалить
-          </a-button>
+          > {{ $t('pages.chatSearch.results.card.delete') }} </a-button>
         </li>
       </ul>
     </section>
@@ -376,3 +372,21 @@ const formatDistance = (value?: number | null) => {
   font-size: 13px;
 }
 </style>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

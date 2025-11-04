@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ThreadSummary } from '@/domain/threads/types'
 import TextView from '@/ui/common/text-view/TextView.vue'
 
@@ -11,13 +12,20 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const { t, locale } = useI18n()
 
-const title = computed(() => props.threadItem.title?.trim() || 'Новый чат')
+const title = computed(() => {
+  void locale.value
+  return props.threadItem.title?.trim() || t('threads.untitled')
+})
+
 const subtitle = computed(() => {
+  void locale.value
+
   if (props.threadItem.summary?.trim()) return props.threadItem.summary
   const topic = props.threadItem.metadata?.['topic']
   if (typeof topic === 'string' && topic.trim().length > 0) return topic
-  return `Тред ${props.threadItem.id.slice(0, 8)}`
+  return t('threads.fallbackTitle', { id: props.threadItem.id.slice(0, 8) })
 })
 </script>
 
@@ -32,10 +40,10 @@ const subtitle = computed(() => {
         v-if="props.whenDeleteThread"
         class="ThreadItem__delete"
         type="button"
-        title="Удалить чат"
+        :title="$t('threads.deleteTooltip')"
         @click.stop="props.whenDeleteThread?.(props.threadItem.id)"
     >
-      ×
+      x
     </button>
     <div
         class="ThreadItem__content"

@@ -1,24 +1,29 @@
 <script lang="ts" setup>
 import burger from '@/assets/icons/menu/burger.svg'
+import { LanguageSwitcher } from '@/ui/common/language-switcher'
+
 interface Props {
   whenBurgerClick: () => void
 }
 
 const props = defineProps<Props>()
 </script>
+
 <template>
   <div class="MobileMenu">
-    <button @click="props.whenBurgerClick">
+    <button
+        class="MobileMenu__burger"
+        type="button"
+        @click="props.whenBurgerClick"
+    >
       <span class="visually-hidden"></span>
       <img :src="burger" alt="burger">
     </button>
 
-    <a-button type="primary">
-      Новый чат
-    </a-button>
-
+    <LanguageSwitcher class="MobileMenu__language" />
   </div>
 </template>
+
 <style lang="scss" scoped>
 .MobileMenu {
   height: 60px;
@@ -26,8 +31,25 @@ const props = defineProps<Props>()
   justify-content: space-between;
   display: flex;
   align-items: center;
-  padding: 14px 40px;
+  padding: 14px 20px;
   width: 100%;
+  gap: 16px;
+}
+
+.MobileMenu__burger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--gray_20);
+  background-color: white;
+  cursor: pointer;
+}
+
+.MobileMenu__language {
+  flex: 1;
 }
 
 .visually-hidden {
@@ -39,5 +61,4 @@ const props = defineProps<Props>()
   white-space: nowrap;
   width: 1px;
 }
-
 </style>

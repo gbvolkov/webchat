@@ -1,24 +1,26 @@
 <script lang="ts" setup>
-import { reactive, ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
+import { message, Modal } from 'ant-design-vue'
 import folder from '@/assets/icons/menu/folder.svg'
 import figures from '@/assets/icons/menu/figures.svg'
 import dialog from '@/assets/icons/menu/dialog.svg'
 import search from '@/assets/icons/menu/search.svg'
-
 import logo from '@/assets/icons/menu/logo.svg'
 import assistant from '@/assets/icons/menu/assistant.svg'
 import MenuItem from './MenuItem.vue'
 import { Routes } from '@/config/router/routes'
-import { useRoute, useRouter } from 'vue-router'
 import { ThreadsWrapper } from '@/ui/common/layout/threads-wrapper'
 import { EventKeys } from '@/ui/common/layout/menu/types'
 import { useAuthStore } from '@/store/auth-store'
 import { ThreadsApi } from '@/domain/threads/api'
-import { message, Modal } from 'ant-design-vue'
+import { LanguageSwitcher } from '@/ui/common/language-switcher'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const { t, locale } = useI18n()
 
 const selectedKey = ref<string>(route.name as string)
 const threadsWrapperRef = ref<InstanceType<typeof ThreadsWrapper> | null>(null)
@@ -31,7 +33,11 @@ const selectedThreadId = computed((): string => {
 
 watch(
   () => route.name,
-  (newRouteName) => newRouteName && (selectedKey.value = newRouteName as string),
+  (newRouteName) => {
+    if (newRouteName) {
+      selectedKey.value = newRouteName as string
+    }
+  },
   { immediate: true, deep: true },
 )
 
@@ -40,27 +46,6 @@ interface IMenuItem {
   key: EventKeys
   icon: string
   type?: 'group'
-}
-
-function getItem(
-  label: string,
-  key: EventKeys,
-  icon: string,
-  type?: 'group',
-): IMenuItem {
-  return {
-    key,
-    icon,
-    label,
-    type,
-  }
-}
-
-const CHAT_LABELS: Record<EventKeys, string> = {
-  [EventKeys.NewChat]: 'Новый чат',
-  [EventKeys.ChatSearch]: 'Поиск по чатам',
-  [EventKeys.ChatHistory]: 'История',
-  [EventKeys.ChatLibrary]: 'Библиотека',
 }
 
 const CHAT_ICONS: Record<EventKeys, string> = {
@@ -75,16 +60,38 @@ const EVENT_KEY_TO_ROUTE_ADAPTER: Partial<Record<EventKeys, Routes>> = {
   [EventKeys.ChatLibrary]: Routes.ChatsLibrary,
 }
 
-const items = reactive<IMenuItem[]>([
-  getItem(CHAT_LABELS[EventKeys.NewChat], EventKeys.NewChat, CHAT_ICONS[EventKeys.NewChat]),
-  getItem(CHAT_LABELS[EventKeys.ChatSearch], EventKeys.ChatSearch, CHAT_ICONS[EventKeys.ChatSearch]),
-  getItem(CHAT_LABELS[EventKeys.ChatHistory], EventKeys.ChatHistory, CHAT_ICONS[EventKeys.ChatHistory]),
-  getItem(CHAT_LABELS[EventKeys.ChatLibrary], EventKeys.ChatLibrary, CHAT_ICONS[EventKeys.ChatLibrary]),
-])
+const HIDDEN_MENU_KEYS = new Set<EventKeys>([EventKeys.ChatHistory, EventKeys.ChatLibrary])
+
+const menuItems = computed<IMenuItem[]>(() => {
+  void locale.value
+
+  return [
+    {
+      key: EventKeys.NewChat,
+      icon: CHAT_ICONS[EventKeys.NewChat],
+      label: t('menu.items.newChat'),
+    },
+    {
+      key: EventKeys.ChatSearch,
+      icon: CHAT_ICONS[EventKeys.ChatSearch],
+      label: t('menu.items.chatSearch'),
+    },
+    {
+      key: EventKeys.ChatHistory,
+      icon: CHAT_ICONS[EventKeys.ChatHistory],
+      label: t('menu.items.chatHistory'),
+    },
+    {
+      key: EventKeys.ChatLibrary,
+      icon: CHAT_ICONS[EventKeys.ChatLibrary],
+      label: t('menu.items.chatLibrary'),
+    },
+  ].filter((item) => !HIDDEN_MENU_KEYS.has(item.key))
+})
 
 const createNewThread = async () => {
   if (!authStore.hasSession) {
-    message.warning('Please sign in to start a new chat.')
+    message.warning(t('menu.needsAuth'))
     return
   }
   try {
@@ -96,7 +103,7 @@ const createNewThread = async () => {
       params: { id: data.id },
     })
   } catch (error) {
-    message.error('Не удалось создать новый чат')
+    message.error(t('menu.errors.create'))
     console.error(error)
   }
 }
@@ -124,28 +131,23 @@ const whenClickLogo = () => router.push({ name: Routes.Chat })
 
 const handleDeleteThread = (id: string) => {
   Modal.confirm({
-    title: 'Удалить чат?',
-    content: 'Чат будет скрыт из списка истории.',
-    okText: 'Удалить',
-    cancelText: 'Отмена',
+    title: t('common.confirmations.deleteChat.title'),
+    content: t('common.confirmations.deleteChat.description'),
+    okText: t('common.confirmations.deleteChat.confirm'),
+    cancelText: t('common.confirmations.deleteChat.cancel'),
     okType: 'danger',
     async onOk() {
       try {
         await ThreadsApi.deleteThread(id)
-        message.success('Чат удалён')
+        message.success(t('menu.success.delete'))
         await threadsWrapperRef.value?.refresh()
-        const { data } = await ThreadsApi.getThreads()
-        if (data.items.length > 0) {
-          const nextThread = data.items[0]
-          selectedKey.value = Routes.ChatDetail
-          router.push({ name: Routes.ChatDetail, params: { id: nextThread.id } })
-        } else {
-          selectedKey.value = Routes.Chat
+
+        if (selectedKey.value.startsWith(`${Routes.ChatDetail}/`)) {
           router.push({ name: Routes.Chat })
         }
         window.dispatchEvent(new CustomEvent('threads:refresh'))
       } catch (error) {
-        message.error('Не удалось удалить чат')
+        message.error(t('menu.errors.delete'))
         console.error('Failed to delete thread', error)
       }
     },
@@ -188,7 +190,7 @@ onBeforeUnmount(() => {
 
     <div class="MenuWrapper__mainItemsWrapper">
       <MenuItem
-          v-for="({ label, key, icon }, index) in items"
+          v-for="({ label, key, icon }, index) in menuItems"
           :key="index"
           :label="label"
           :leftContentIcon="icon"
@@ -205,12 +207,16 @@ onBeforeUnmount(() => {
         :whenDeleteThread="handleDeleteThread"
     />
 
+    <div class="MenuWrapper__language">
+      <LanguageSwitcher />
+    </div>
+
     <button
         class="MenuWrapper__logout"
         type="button"
         @click="handleLogout"
     >
-      Sign out
+      {{ $t('menu.signOut') }}
     </button>
   </aside>
 </template>
@@ -242,6 +248,10 @@ onBeforeUnmount(() => {
     border-bottom: 1px solid var(--gray_20);
   }
 
+  &__language {
+    padding: 16px 12px 0 12px;
+  }
+
   &__logout {
     width: calc(100% - 24px);
     margin: 16px 12px;
@@ -266,6 +276,3 @@ onBeforeUnmount(() => {
   }
 }
 </style>
-
-
-

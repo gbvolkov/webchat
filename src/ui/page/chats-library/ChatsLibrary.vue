@@ -1,6 +1,9 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 </script>
 
 <template>
-  Здесь будет библиотека задач
+  {{ $t('pages.chatLibrary.placeholder') }}
 </template>
+
+
+

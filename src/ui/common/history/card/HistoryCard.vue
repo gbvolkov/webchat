@@ -1,5 +1,6 @@
-<script lang="ts" setup>
+﻿<script lang="ts" setup>
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Dropdown, Menu, MenuItem } from 'ant-design-vue'
 import { Tag } from '@/ui/common/tag'
 import dots from '@/assets/icons/history/dots.svg'
@@ -10,18 +11,19 @@ import { Props } from '@/ui/common/history/card/types'
 
 
 const props = defineProps<Props>()
+const { t } = useI18n()
 
 const menuItems = computed(() => [
   {
     key: 'export',
-    label: 'Экспорт',
+    label: t('pages.chatsHistory.card.export'),
     icon: exportImage,
     onClick: props.whenClickExport,
     color: 'var(--gray_80)',
   },
   {
     key: 'delete',
-    label: 'Удалить',
+    label: t('pages.chatsHistory.card.delete'),
     icon: trash,
     onClick: props.whenClickDelete,
     color: 'var(--error_50)',
@@ -134,3 +136,5 @@ const menuItems = computed(() => [
 }
 
 </style>
+
+
