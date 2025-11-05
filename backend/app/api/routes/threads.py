@@ -752,7 +752,38 @@ async def stream_message(
     last_status["value"] = "queued"
 
     async def worker() -> None:
+        heartbeat_interval_seconds = 10.0
+        stop_heartbeat = asyncio.Event()
+        running_chunk_json = json.dumps(
+            {
+                "id": str(thread_id),
+                "object": "chat.completion.chunk",
+                "agent_status": "running",
+                "choices": [
+                    {
+                        "delta": {},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+
+        async def heartbeat_loop() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(heartbeat_interval_seconds)
+                    if stop_heartbeat.is_set():
+                        break
+                    await queue.put(running_chunk_json)
+            except asyncio.CancelledError:
+                raise
+
+        heartbeat_task: asyncio.Task | None = None
         try:
+            await queue.put(running_chunk_json)
+            last_status["value"] = "running"
+            heartbeat_task = asyncio.create_task(heartbeat_loop())
             await _process_message_creation(
                 thread=thread,
                 payload=payload,
@@ -823,6 +854,11 @@ async def stream_message(
             )
             last_status["value"] = "failed"
         finally:
+            stop_heartbeat.set()
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
             await queue.put(None)
 
     task = asyncio.create_task(worker())
