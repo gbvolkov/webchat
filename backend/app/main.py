@@ -124,7 +124,7 @@ async def log_http_traffic(request: Request, call_next):
         request.method,
         str(request.url),
         headers_in,
-        body_text,
+        body_text[:128],
     )
 
     async def receive() -> dict[str, object]:
