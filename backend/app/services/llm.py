@@ -134,24 +134,26 @@ class OpenAIChatService:
         if "Authorization" in safe_headers:
             safe_headers["Authorization"] = "***redacted***"
         
-        ##logging without file data
-        redacted_payload = {
-            **payload,
-            "messages": [
-                {
-                    **message,
-                    "content": [
-                        (
-                            {k: v for k, v in part.items() if k != "data"}
-                            if isinstance(part, dict)
-                            else part
-                        )
-                        for part in message.get("content", [])
-                    ],
-                }
-                for message in payload.get("messages", [])
-            ],
-        }
+        # Redact attachment payloads before logging
+        redacted_messages: list[dict[str, Any]] = []
+        for message in payload.get("messages", []):
+            redacted_parts: list[Any] = []
+            for part in message.get("content", []):
+                if isinstance(part, dict):
+                    part_copy = dict(part)
+                    data_value = part_copy.get("data")
+                    if isinstance(data_value, str):
+                        part_copy["data"] = data_value[:64]
+                    elif "data" in part_copy:
+                        part_copy["data"] = data_value
+                    redacted_parts.append(part_copy)
+                else:
+                    redacted_parts.append(part)
+            message_copy = dict(message)
+            message_copy["content"] = redacted_parts
+            redacted_messages.append(message_copy)
+
+        redacted_payload = {**payload, "messages": redacted_messages}
         logger.info(
             "OpenAI request dispatched: method=POST url=%s headers=%s payload=%s",
             str(self._client.base_url.join("chat/completions")),
@@ -647,23 +649,25 @@ class OpenAIChatService:
                 )
             logger.debug("OpenAI-compatible payload summary: %s", summaries)
 
-            redacted_payload = {
-                **payload,
-                "messages": [
-                    {
-                        **message,
-                        "content": [
-                            (
-                                {k: v for k, v in part.items() if k != "data"}
-                                if isinstance(part, dict)
-                                else part
-                            )
-                            for part in message.get("content", [])
-                        ],
-                    }
-                    for message in payload.get("messages", [])
-                ],
-            }            
+            redacted_messages: list[dict[str, Any]] = []
+            for message in payload.get("messages", []):
+                redacted_parts: list[Any] = []
+                for part in message.get("content", []):
+                    if isinstance(part, dict):
+                        part_copy = dict(part)
+                        data_value = part_copy.get("data")
+                        if isinstance(data_value, str):
+                            part_copy["data"] = data_value[:64]
+                        elif "data" in part_copy:
+                            part_copy["data"] = data_value
+                        redacted_parts.append(part_copy)
+                    else:
+                        redacted_parts.append(part)
+                message_copy = dict(message)
+                message_copy["content"] = redacted_parts
+                redacted_messages.append(message_copy)
+
+            redacted_payload = {**payload, "messages": redacted_messages}
             logger.debug("OpenAI-compatible payload raw: %s", redacted_payload)
 
     @staticmethod
