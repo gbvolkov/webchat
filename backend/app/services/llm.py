@@ -133,11 +133,30 @@ class OpenAIChatService:
         safe_headers = dict(self._client.headers)
         if "Authorization" in safe_headers:
             safe_headers["Authorization"] = "***redacted***"
+        
+        ##logging without file data
+        redacted_payload = {
+            **payload,
+            "messages": [
+                {
+                    **message,
+                    "content": [
+                        (
+                            {k: v for k, v in part.items() if k != "data"}
+                            if isinstance(part, dict)
+                            else part
+                        )
+                        for part in message.get("content", [])
+                    ],
+                }
+                for message in payload.get("messages", [])
+            ],
+        }
         logger.info(
             "OpenAI request dispatched: method=POST url=%s headers=%s payload=%s",
             str(self._client.base_url.join("chat/completions")),
             safe_headers,
-            json.dumps(payload, ensure_ascii=False),
+            json.dumps(redacted_payload, ensure_ascii=False),
         )
 
         try:
