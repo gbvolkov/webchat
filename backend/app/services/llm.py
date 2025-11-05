@@ -646,7 +646,25 @@ class OpenAIChatService:
                     }
                 )
             logger.debug("OpenAI-compatible payload summary: %s", summaries)
-            logger.debug("OpenAI-compatible payload raw: %s", payload)
+
+            redacted_payload = {
+                **payload,
+                "messages": [
+                    {
+                        **message,
+                        "content": [
+                            (
+                                {k: v for k, v in part.items() if k != "data"}
+                                if isinstance(part, dict)
+                                else part
+                            )
+                            for part in message.get("content", [])
+                        ],
+                    }
+                    for message in payload.get("messages", [])
+                ],
+            }            
+            logger.debug("OpenAI-compatible payload raw: %s", redacted_payload)
 
     @staticmethod
     def _truncate_text(text: str, length: int = 120) -> str:
