@@ -22,11 +22,13 @@ from app.services.search_index import SearchMatch, SearchResultSet  # noqa: E402
 from sqlmodel import Session, select  # noqa: E402
 from app.db.models import User  # noqa: E402
 from app.services.auth import AuthService  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 
 
 class SuccessfulStubLLM:
     def __init__(self):
         self.calls = 0
+        self.chunk_attachments: list[dict[str, object]] | None = None
 
     async def create_completion(
         self,
@@ -62,6 +64,8 @@ class SuccessfulStubLLM:
                     },
                 ],
             }
+            if self.chunk_attachments:
+                chunk_payload["message_metadata"] = {"attachments": self.chunk_attachments}
             result = on_chunk(chunk_payload)
             if inspect.isawaitable(result):
                 await result
@@ -401,6 +405,52 @@ def test_provider_thread_state_upsert_route():
         engine.dispose()
 
 
+def test_provider_attachments_persisted_and_returned():
+    stub = SuccessfulStubLLM()
+    stub.chunk_attachments = [
+        {
+            "type": "file",
+            "filename": "report.xlsx",
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "bytes": 2048,
+            "storage_filename": "report_storage.xlsx",
+            "download_url": "/api/attachments/report_storage.xlsx",
+        }
+    ]
+    search_stub = StubSearchIndex()
+    app.dependency_overrides[get_chat_service] = lambda: stub
+    app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
+    try:
+        with TestClient(app) as client:
+            user = authenticate_client(client)
+            thread_resp = client.post("/api/threads", json={"title": "Attachments"})
+            thread_id = thread_resp.json()["id"]
+            message_payload = {
+                "text": "Please attach report",
+                "user_id": str(user.id),
+                "model": "stub-model",
+            }
+            message_resp = client.post(f"/api/threads/{thread_id}/messages", json=message_payload)
+            assert message_resp.status_code == 201
+
+            history_resp = client.get(f"/api/threads/{thread_id}/messages")
+            assert history_resp.status_code == 200
+            messages = history_resp.json()["items"]
+            assistant_message = messages[0]
+            assert assistant_message["attachments"], "Expected assistant attachments in history response"
+            attachment = assistant_message["attachments"][0]
+            assert attachment["filename"] == "report.xlsx"
+            assert attachment["download_url"] == "/api/attachments/report_storage.xlsx"
+            assert attachment["size_bytes"] == 2048
+            assert attachment["data_base64"] is None
+    finally:
+        app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
+        app.dependency_overrides.pop(get_chat_service, None)
+        engine.dispose()
+
+
 def test_conversation_id_reused_between_messages():
     stub = SuccessfulStubLLM()
     recorded_conversation_ids: list[str | None] = []
@@ -523,3 +573,23 @@ def test_delete_thread_marks_as_deleted():
         app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
         engine.dispose()
+
+
+def test_download_attachment_endpoint_serves_files():
+    settings = get_settings()
+    storage_dir = Path(settings.attachments_storage_dir).expanduser()
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    filename = "stored_report_123.txt"
+    file_path = storage_dir / filename
+    file_contents = b"example attachment payload"
+    file_path.write_bytes(file_contents)
+    try:
+        with TestClient(app) as client:
+            authenticate_client(client)
+            response = client.get(f"/api/attachments/{filename}")
+            assert response.status_code == 200
+            assert response.content == file_contents
+            disposition = response.headers.get("content-disposition", "")
+            assert filename in disposition
+    finally:
+        file_path.unlink(missing_ok=True)

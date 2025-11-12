@@ -70,5 +70,6 @@ export interface MessageAttachmentDTO {
     filename: string
     content_type: string
     data_base64?: string | null
+    download_url?: string | null
     created_at: string
 }

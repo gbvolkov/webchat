@@ -1,8 +1,9 @@
 ﻿<script lang="ts" setup>
 import 'deep-chat'
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 import type { Signals } from 'deep-chat/dist/types/handler'
+import type { MessageFile } from 'deep-chat/dist/types/messageFile'
 import { API_BASE_URL } from '@/config/api'
 import type { IAttachmentUpload } from '@/domain/chat/api/types'
 import { useAuthStore } from '@/store/auth-store'
@@ -41,6 +42,9 @@ const streamErrorMessage = computed(() => {
   void locale.value
   return t('chat.errors.stream')
 })
+
+const hydratedHistory = ref<TMessageContent[]>([])
+let historyHydrationToken = 0
 
 
 const readFileAsBase64 = (file: File): Promise<string> => {
@@ -109,6 +113,208 @@ const extractAttachments = async (sources: unknown): Promise<IAttachmentUpload[]
   if (!items.length) return []
   const uploads = await Promise.all(items.map((item) => normalizeAttachment(item)))
   return uploads.filter((item): item is IAttachmentUpload => !!item)
+}
+
+const resolveApiBaseUrl = (): URL | null => {
+  try {
+    return new URL(API_BASE_URL)
+  } catch {
+    try {
+      return new URL(API_BASE_URL, window.location.origin)
+    } catch {
+      return null
+    }
+  }
+}
+
+const apiBaseUrl = resolveApiBaseUrl()
+const apiBaseForResolution = apiBaseUrl
+  ? apiBaseUrl.toString().endsWith('/')
+    ? apiBaseUrl.toString()
+    : `${apiBaseUrl.toString()}/`
+  : `${window.location.origin}/`
+const apiOrigin = (() => {
+  try {
+    return new URL(apiBaseForResolution).origin
+  } catch {
+    return window.location.origin
+  }
+})()
+
+const streamObjectUrls = new Set<string>()
+let activeHistoryObjectUrls = new Set<string>()
+
+const revokeObjectUrls = (bucket: Set<string>) => {
+  bucket.forEach((url) => URL.revokeObjectURL(url))
+  bucket.clear()
+}
+
+const releaseSecureObjectUrls = () => {
+  revokeObjectUrls(streamObjectUrls)
+  revokeObjectUrls(activeHistoryObjectUrls)
+}
+
+const isProtectedAttachmentUrl = (rawUrl: string): boolean => {
+  try {
+    const parsed = new URL(rawUrl)
+    return parsed.origin === apiOrigin && parsed.pathname.includes('/attachments/')
+  } catch {
+    try {
+      const fallback = new URL(rawUrl, window.location.origin)
+      return fallback.origin === apiOrigin && fallback.pathname.includes('/attachments/')
+    } catch {
+      return false
+    }
+  }
+}
+
+interface AttachmentUrlOptions {
+  bucket?: Set<string>
+}
+
+const buildAuthorizedObjectUrl = async (
+  absoluteUrl: string,
+  options?: AttachmentUrlOptions,
+): Promise<string | undefined> => {
+  try {
+    const response = await authStore.authorizedFetch(absoluteUrl)
+    if (!response.ok) {
+      console.warn('Failed to download attachment', {
+        url: absoluteUrl,
+        status: response.status,
+      })
+      return undefined
+    }
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const bucket = options?.bucket ?? streamObjectUrls
+    bucket.add(objectUrl)
+    return objectUrl
+  } catch (error) {
+    console.error('Failed to fetch attachment', absoluteUrl, error)
+    return undefined
+  }
+}
+
+const cloneMessageHistory = (source: TMessageContent[]): TMessageContent[] => {
+  return source.map((message) => {
+    const cloned: TMessageContent = { ...message }
+    if (Array.isArray(message.files) && message.files.length > 0) {
+      cloned.files = message.files
+        .map((file) => {
+          if (!file) return null
+          return { ...file }
+        })
+        .filter((file): file is MessageFile => Boolean(file))
+    }
+    return cloned
+  })
+}
+
+const buildHistoryPlaceholder = (source: TMessageContent[]): TMessageContent[] => {
+  return cloneMessageHistory(source).map((message) => {
+    if (!Array.isArray(message.files) || message.files.length === 0) {
+      return message
+    }
+    const visibleFiles = message.files.filter((file) => {
+      if (!file || typeof file.src !== 'string' || !file.src) return false
+      return !isProtectedAttachmentUrl(file.src)
+    })
+    message.files = visibleFiles.length > 0 ? visibleFiles : undefined
+    return message
+  })
+}
+
+const hydrateHistoryMessages = async (messages: TMessageContent[]): Promise<void> => {
+  const hydrationId = ++historyHydrationToken
+  const cloned = cloneMessageHistory(messages)
+  const pendingUrls = new Set<string>()
+  const placeholder = buildHistoryPlaceholder(messages)
+  hydratedHistory.value = placeholder
+
+  try {
+    await Promise.all(
+      cloned.map(async (message) => {
+        if (!Array.isArray(message.files) || message.files.length === 0) return
+        await Promise.all(
+          message.files.map(async (file, index) => {
+            if (!file || typeof file.src !== 'string' || !file.src) return
+            if (!isProtectedAttachmentUrl(file.src)) return
+            const authorizedSrc = await buildAuthorizedObjectUrl(file.src, { bucket: pendingUrls })
+            if (authorizedSrc) {
+              message.files![index] = { ...file, src: authorizedSrc }
+            }
+          }),
+        )
+      }),
+    )
+  } finally {
+    if (hydrationId === historyHydrationToken) {
+      revokeObjectUrls(activeHistoryObjectUrls)
+      activeHistoryObjectUrls = pendingUrls
+      hydratedHistory.value = cloned
+    } else {
+      revokeObjectUrls(pendingUrls)
+    }
+  }
+}
+
+watch(
+  () => props.history,
+  (next) => {
+    const messages = Array.isArray(next) ? next : []
+    void hydrateHistoryMessages(messages)
+  },
+  { immediate: true },
+)
+
+const resolveAttachmentUrl = (rawUrl?: string | null): string | undefined => {
+  if (!rawUrl) return undefined
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return undefined
+  try {
+    return new URL(trimmed, apiBaseForResolution).toString()
+  } catch {
+    return trimmed
+  }
+}
+
+const inferStreamFileType = (contentType?: string): MessageFile['type'] => {
+  if (!contentType) return 'any'
+  if (contentType.startsWith('image/')) return 'image'
+  if (contentType.startsWith('audio/')) return 'audio'
+  return 'any'
+}
+
+const normalizeStreamAttachmentFile = async (attachment: Record<string, unknown>): Promise<MessageFile | null> => {
+  const filenameRaw = typeof attachment.filename === 'string' ? attachment.filename.trim() : ''
+  const contentType = typeof attachment.content_type === 'string' ? attachment.content_type : ''
+  const downloadUrl = typeof attachment.download_url === 'string' ? attachment.download_url.trim() : ''
+  const dataBase64 = typeof attachment.data_base64 === 'string' ? attachment.data_base64.trim() : ''
+  const name = filenameRaw || 'attachment'
+
+  let src: string | undefined
+  if (downloadUrl) {
+    const absoluteUrl = resolveAttachmentUrl(downloadUrl)
+    if (absoluteUrl) {
+      if (isProtectedAttachmentUrl(absoluteUrl)) {
+        src = await buildAuthorizedObjectUrl(absoluteUrl)
+      } else {
+        src = absoluteUrl
+      }
+    }
+  }
+  if (!src && dataBase64) {
+    const mime = contentType || 'application/octet-stream'
+    src = `data:${mime};base64,${dataBase64}`
+  }
+  if (!src) return null
+
+  return {
+    name,
+    type: inferStreamFileType(contentType),
+    src,
+  }
 }
 
 const FORM_DATA_MESSAGE_RE = /^message(\d+)$/i
@@ -246,6 +452,35 @@ const sendStreamingMessage = async (
   let hasAssistantMessage = false
   let assistantRole: string | undefined
   let streamingFinished = false
+  const assistantFiles: MessageFile[] = []
+  const assistantFileMap = new Map<string, MessageFile>()
+
+  const syncAssistantFiles = () => {
+    assistantFiles.splice(0, assistantFiles.length, ...assistantFileMap.values())
+  }
+
+  const upsertAssistantFiles = async (candidateList: unknown): Promise<boolean> => {
+    if (!Array.isArray(candidateList)) return false
+    let changed = false
+    for (const candidate of candidateList) {
+      if (!candidate || typeof candidate !== 'object') continue
+      const normalized = await normalizeStreamAttachmentFile(candidate as Record<string, unknown>)
+      if (!normalized) continue
+      const rawId = (candidate as Record<string, unknown>).id
+      const key =
+        (typeof rawId === 'string' && rawId.trim().length > 0 && rawId.trim()) ||
+        normalized.src ||
+        `${normalized.name}-${assistantFileMap.size}`
+      if (!assistantFileMap.has(key)) {
+        assistantFileMap.set(key, normalized)
+        changed = true
+      }
+    }
+    if (changed) {
+      syncAssistantFiles()
+    }
+    return changed
+  }
 
   const appendContent = (content: unknown): boolean => {
     if (typeof content === 'string') {
@@ -281,9 +516,12 @@ const sendStreamingMessage = async (
   }
 
   const ensureAssistantMessage = async () => {
-    const payload: { role: string; text: string; overwrite?: boolean } = {
+    const payload: { role: string; text: string; overwrite?: boolean; files?: MessageFile[] } = {
       role: assistantRole ?? 'assistant',
       text: assistantText,
+    }
+    if (assistantFiles.length) {
+      payload.files = assistantFiles.map((file) => ({ ...file }))
     }
     if (hasAssistantMessage) {
       payload.overwrite = true
@@ -305,6 +543,13 @@ const sendStreamingMessage = async (
 
     let chunkHasContent = false
     let chunkHasRoleHint = false
+    let chunkHasFiles = false
+
+    const metadata = (payload as Record<string, unknown>).message_metadata
+    if (metadata && typeof metadata === 'object') {
+      const attachments = (metadata as Record<string, unknown>).attachments
+      chunkHasFiles = (await upsertAssistantFiles(attachments)) || chunkHasFiles
+    }
 
     const choices = Array.isArray(payload.choices) ? payload.choices : []
     for (const choice of choices) {
@@ -333,7 +578,7 @@ const sendStreamingMessage = async (
       }
     }
 
-    if (chunkHasContent || (!hasAssistantMessage && chunkHasRoleHint)) {
+    if (chunkHasContent || chunkHasFiles || (!hasAssistantMessage && chunkHasRoleHint)) {
       await ensureAssistantMessage()
     }
   }
@@ -470,6 +715,9 @@ const defineConnectFn = () => {
 }
 
 onMounted(defineConnectFn)
+onBeforeUnmount(() => {
+  releaseSecureObjectUrls()
+})
 
 const textInputContainerStyles: CSSProperties = {
   borderRadius: '16px',
@@ -517,7 +765,7 @@ const userBubbleStyles: CSSProperties = {
     ref="chatElementRef"
     class="Chat"
     :connect="{}"
-    :history="props.history"
+    :history="hydratedHistory"
     :introPanelStyle="introPanelStyle"
     :textInput="{
       styles: {

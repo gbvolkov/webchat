@@ -67,6 +67,8 @@ class MessageAttachmentRead(MessageAttachmentBase):
     id: UUID
     created_at: datetime
     data_base64: Optional[str] = None
+    size_bytes: Optional[int] = None
+    download_url: Optional[str] = None
 
 
 MessageCreate.model_rebuild()

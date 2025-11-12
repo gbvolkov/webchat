@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
 import inspect
 import json
 import logging
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Sequence
+from uuid import uuid4
 
 import httpx
 
@@ -71,6 +77,8 @@ class OpenAIChatService:
         api_key: str | None,
         timeout_seconds: float,
         trace_enabled: bool = True,
+        attachments_storage_dir: str | Path | None = None,
+        attachments_download_endpoint: str | None = None,
     ) -> None:
         headers: dict[str, str] = {}
         if api_key:
@@ -94,6 +102,10 @@ class OpenAIChatService:
         )
         self._trace_enabled = trace_enabled
         self._trace_level = logging.INFO
+        self._attachments_dir = self._prepare_attachments_dir(attachments_storage_dir)
+        self._attachments_endpoint = (
+            attachments_download_endpoint.rstrip("/") if attachments_download_endpoint else None
+        )
         self._trace("Trace logging enabled for OpenAIChatService base_url=%s", self._client.base_url)
 
     async def create_completion(
@@ -232,6 +244,7 @@ class OpenAIChatService:
                             self._trace("Discarded streaming payload after failed JSON parse")
                             continue
                         self._trace_json("Streaming payload object", payload_obj)
+                        await self._persist_chunk_attachments(payload_obj)
                         if on_chunk is not None:
                             self._trace("Forwarding streaming chunk to caller callback")
                             chunk_result = on_chunk(payload_obj)
@@ -343,6 +356,7 @@ class OpenAIChatService:
             )
 
         data = response.json()
+        await self._persist_chunk_attachments(data)
 
         try:
             choice = data["choices"][0]
@@ -669,6 +683,101 @@ class OpenAIChatService:
 
             redacted_payload = {**payload, "messages": redacted_messages}
             logger.debug("OpenAI-compatible payload raw: %s", redacted_payload)
+
+    def _prepare_attachments_dir(self, directory: str | Path | None) -> Path | None:
+        if directory is None:
+            return None
+        try:
+            path = Path(directory).expanduser()
+            path.mkdir(parents=True, exist_ok=True)
+            resolved = path.resolve()
+            logger.info("LLM attachment storage initialised: path=%s", resolved)
+            return resolved
+        except OSError:
+            logger.exception("Failed to prepare attachment storage directory: path=%s", directory)
+        return None
+
+    async def _persist_chunk_attachments(self, payload: dict[str, Any]) -> None:
+        if self._attachments_dir is None:
+            return
+        metadata = payload.get("message_metadata")
+        if not isinstance(metadata, dict):
+            return
+        attachments = metadata.get("attachments")
+        if not isinstance(attachments, list) or not attachments:
+            return
+        stored_attachments: list[dict[str, Any]] = []
+        for attachment in attachments:
+            try:
+                stored = await self._store_single_attachment(attachment)
+            except Exception:
+                logger.exception("Failed to store provider attachment from streaming payload")
+                continue
+            stored_attachments.append(stored)
+        if stored_attachments:
+            metadata["attachments"] = stored_attachments
+
+    async def _store_single_attachment(self, attachment: Any) -> dict[str, Any]:
+        if not isinstance(attachment, dict):
+            return {}
+        sanitized = {
+            key: value
+            for key, value in attachment.items()
+            if key not in {"data", "image_base64"}
+        }
+        data_b64 = attachment.get("data")
+        if not isinstance(data_b64, str):
+            logger.warning(
+                "Skipping provider attachment without data payload: keys=%s",
+                list(attachment.keys()),
+            )
+            return sanitized
+        try:
+            binary = base64.b64decode(data_b64, validate=True)
+        except (binascii.Error, ValueError):
+            logger.warning("Failed to decode provider attachment payload; skipping persistence.")
+            return sanitized
+        filename = str(attachment.get("filename") or attachment.get("name") or "attachment.bin")
+        if self._attachments_dir is None:
+            return sanitized
+        storage_name = self._build_storage_filename(filename)
+        target_path = self._attachments_dir / storage_name
+        try:
+            await asyncio.to_thread(target_path.write_bytes, binary)
+        except OSError:
+            logger.exception("Failed to persist provider attachment: filename=%s", filename)
+            return sanitized
+        logger.info(
+            "Stored provider attachment: filename=%s storage_name=%s size=%s",
+            filename,
+            storage_name,
+            len(binary),
+        )
+        sanitized.setdefault("type", attachment.get("type") or "file")
+        sanitized["filename"] = filename
+        sanitized["bytes"] = len(binary)
+        content_type = (
+            attachment.get("content_type")
+            or attachment.get("media_type")
+            or attachment.get("mime_type")
+        )
+        if content_type:
+            sanitized["content_type"] = content_type
+        sanitized["storage_filename"] = storage_name
+        if self._attachments_endpoint:
+            sanitized["download_url"] = f"{self._attachments_endpoint}/{storage_name}"
+        return sanitized
+
+    @staticmethod
+    def _build_storage_filename(original: str) -> str:
+        original_name = Path(original).name or "attachment"
+        stem = re.sub(r"[^A-Za-z0-9_-]", "_", Path(original_name).stem) or "attachment"
+        stem = stem[:80]
+        suffix = Path(original_name).suffix
+        safe_suffix = re.sub(r"[^A-Za-z0-9.]", "", suffix)[:16]
+        if safe_suffix and not safe_suffix.startswith("."):
+            safe_suffix = f".{safe_suffix}"
+        return f"{stem}_{uuid4().hex}{safe_suffix}"
 
     @staticmethod
     def _truncate_text(text: str, length: int = 120) -> str:

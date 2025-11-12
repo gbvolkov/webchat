@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from app.api.routes.attachments import router as attachments_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.models import router as models_router
 from app.api.routes.provider_threads import router as provider_threads_router
@@ -56,6 +57,8 @@ async def lifespan(app: FastAPI):
             api_key=settings.llm_api_key,
             timeout_seconds=settings.llm_timeout_seconds,
             trace_enabled=settings.llm_trace_enabled,
+            attachments_storage_dir=settings.attachments_storage_dir,
+            attachments_download_endpoint=f"{settings.api_prefix}/attachments",
         )
         app.state.llm_service = llm_service
     else:
@@ -111,6 +114,12 @@ app.add_middleware(
 http_logger = logging.getLogger("app.http")
 
 
+def _truncate_log_value(value: str, limit: int = 128) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}...(truncated)"
+
+
 @app.middleware("http")
 async def log_http_traffic(request: Request, call_next):
     """
@@ -124,7 +133,7 @@ async def log_http_traffic(request: Request, call_next):
         request.method,
         str(request.url),
         headers_in,
-        body_text[:128],
+        _truncate_log_value(body_text),
     )
 
     async def receive() -> dict[str, object]:
@@ -149,7 +158,7 @@ async def log_http_traffic(request: Request, call_next):
                 http_logger.info(
                     "Outgoing streaming response chunk: status=%s chunk=%s",
                     response.status_code,
-                    chunk_text,
+                    _truncate_log_value(chunk_text),
                 )
                 yield chunk
 
@@ -169,7 +178,7 @@ async def log_http_traffic(request: Request, call_next):
         "Outgoing response: status=%s headers=%s body=%s",
         response.status_code,
         headers_out,
-        body_out_text,
+        _truncate_log_value(body_out_text),
     )
     return response
 
@@ -184,3 +193,4 @@ app.include_router(provider_threads_router, prefix=settings.api_prefix)
 app.include_router(search_router, prefix=settings.api_prefix)
 app.include_router(threads_router, prefix=settings.api_prefix)
 app.include_router(auth_router, prefix=settings.api_prefix)
+app.include_router(attachments_router, prefix=settings.api_prefix)

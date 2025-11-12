@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     chroma_persist_directory: str = "./.chroma"
     search_min_similarity: float = 0.3
     log_level: str = "WARNING"
+    attachments_storage_dir: str = "./storage"
     jwt_secret_key: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15

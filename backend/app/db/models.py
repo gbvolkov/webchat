@@ -112,7 +112,9 @@ class MessageAttachment(SQLModel, table=True):
     message_id: UUID = Field(foreign_key="messages.id", nullable=False, index=True)
     filename: str = Field(max_length=255, nullable=False)
     content_type: str = Field(max_length=255, nullable=False)
-    data: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+    data: Optional[bytes] = Field(default=None, sa_column=Column(LargeBinary, nullable=True))
+    storage_filename: Optional[str] = Field(default=None, max_length=255, nullable=True)
+    size_bytes: Optional[int] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=utcnow, nullable=False)
 
 

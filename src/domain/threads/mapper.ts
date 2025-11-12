@@ -1,4 +1,5 @@
 import type { MessageDTO, MessageAttachmentDTO, SenderType } from '@/domain/threads/types'
+import { API_BASE_URL } from '@/config/api'
 import { Role, TMessageContent } from '@/ui/widget/chat/types'
 
 const ROLE_MAPPER: Record<SenderType, Role> = {
@@ -7,13 +8,29 @@ const ROLE_MAPPER: Record<SenderType, Role> = {
     system: Role.Ai,
 } as const
 
+const resolveAttachmentSrc = (attachment: MessageAttachmentDTO): string | undefined => {
+    if (attachment.data_base64) {
+        return `data:${attachment.content_type};base64,${attachment.data_base64}`
+    }
+    const rawUrl = attachment.download_url?.trim()
+    if (!rawUrl) return undefined
+    try {
+        const base = API_BASE_URL.endsWith('/') ? API_BASE_URL : `${API_BASE_URL}/`
+        return new URL(rawUrl, base).toString()
+    } catch {
+        return rawUrl
+    }
+}
+
 const mapAttachmentsToFiles = (attachments?: MessageAttachmentDTO[]) => {
     if (!attachments?.length) return []
-    return attachments.map((attachment) => ({
-        name: attachment.filename,
-        type: attachment.content_type,
-        src: attachment.data_base64 ? `data:${attachment.content_type};base64,${attachment.data_base64}` : undefined,
-    }))
+    return attachments
+        .map((attachment) => ({
+            name: attachment.filename,
+            type: attachment.content_type,
+            src: resolveAttachmentSrc(attachment),
+        }))
+        .filter((file) => Boolean(file.src))
 }
 
 export const mapThreadInfoToMessageContent = (threadInfo: MessageDTO[]): TMessageContent[] => {

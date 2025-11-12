@@ -4,9 +4,10 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import inspect
 import json
 import logging
-from typing import Sequence
+from typing import Any, Sequence
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -22,6 +23,7 @@ from app.api.deps import (
     get_session,
 )
 from app.db.models import Message, MessageAttachment, MessageStatus, ProviderThreadState, SenderType, Thread, utcnow
+from app.core.config import get_settings
 from app.schemas.common import PaginatedResponse
 from app.schemas.message import MessageAttachmentRead, MessageCreate, MessageRead, MessageUpdate
 from app.schemas.thread import (
@@ -57,19 +59,36 @@ def _get_message_attachments(session: Session, message_ids: Sequence[UUID]) -> d
 
 
 def _attachment_to_read_model(attachment: MessageAttachment, include_data: bool = True) -> MessageAttachmentRead:
-    data_base64 = base64.b64encode(attachment.data).decode("utf-8") if include_data else None
+    data_bytes = attachment.data if include_data and attachment.data is not None else None
+    data_base64 = base64.b64encode(data_bytes).decode("utf-8") if data_bytes else None
+    size_bytes = attachment.size_bytes
+    if size_bytes is None and attachment.data is not None:
+        size_bytes = len(attachment.data)
     return MessageAttachmentRead(
         id=attachment.id,
         filename=attachment.filename,
         content_type=attachment.content_type,
         data_base64=data_base64,
         created_at=attachment.created_at,
+        size_bytes=size_bytes,
+        download_url=_build_attachment_download_url(attachment.storage_filename),
     )
+
+
+def _build_attachment_download_url(storage_filename: str | None) -> str | None:
+    if not storage_filename:
+        return None
+    settings = get_settings()
+    prefix = (settings.api_prefix or "").rstrip("/")
+    base_path = f"{prefix}/attachments" if prefix else "/attachments"
+    return f"{base_path}/{storage_filename}"
 
 
 def _build_prompt_parts(message: Message, attachments: Sequence[MessageAttachment]) -> list[dict[str, object]]:
     parts: list[dict[str, object]] = [{"type": "text", "text": message.text}]
     for attachment in attachments:
+        if attachment.data is None:
+            continue
         data_base64 = base64.b64encode(attachment.data).decode("utf-8")
         if attachment.content_type.startswith("image/"):
             parts.append(
@@ -89,6 +108,68 @@ def _build_prompt_parts(message: Message, attachments: Sequence[MessageAttachmen
                 }
             )
     return parts
+
+
+def _collect_provider_attachments(
+    buffer: dict[str, dict[str, Any]],
+    chunk: dict[str, Any],
+) -> None:
+    metadata = chunk.get("message_metadata")
+    if not isinstance(metadata, dict):
+        return
+    attachments = metadata.get("attachments")
+    if not isinstance(attachments, list):
+        return
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        storage_name = attachment.get("storage_filename")
+        key = storage_name or f"{attachment.get('filename')}:{len(buffer)}"
+        buffer[key] = attachment
+
+
+def _persist_provider_attachments(
+    session: Session,
+    message: Message,
+    attachments: Sequence[dict[str, Any]],
+) -> list[MessageAttachment]:
+    persisted: list[MessageAttachment] = []
+    for attachment in attachments:
+        storage_filename = attachment.get("storage_filename")
+        if not isinstance(storage_filename, str) or not storage_filename:
+            continue
+        filename = str(attachment.get("filename") or storage_filename)
+        raw_content_type = (
+            attachment.get("content_type")
+            or attachment.get("media_type")
+            or attachment.get("mime_type")
+        )
+        content_type = str(raw_content_type) if isinstance(raw_content_type, str) else "application/octet-stream"
+        size_bytes = _coerce_int(attachment.get("bytes"))
+        record = MessageAttachment(
+            message_id=message.id,
+            filename=filename,
+            content_type=content_type,
+            data=None,
+            storage_filename=storage_filename,
+            size_bytes=size_bytes,
+        )
+        persisted.append(record)
+        session.add(record)
+    return persisted
+
+
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            try:
+                return int(stripped)
+            except ValueError:
+                return None
+    return None
 
 
 def _truncate(text: str, length: int) -> str:
@@ -117,6 +198,38 @@ def _ensure_thread(
     if thread is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     return thread
+
+
+def _extract_chunk_text(chunk: dict[str, Any]) -> str:
+    choices = chunk.get("choices")
+    if not isinstance(choices, list):
+        return ""
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        for key in ("delta", "message"):
+            candidate = choice.get(key)
+            text = _extract_text_from_candidate(candidate)
+            if text:
+                return text
+    return ""
+
+
+def _extract_text_from_candidate(candidate: Any) -> str:
+    if not isinstance(candidate, dict):
+        return ""
+    direct = candidate.get("text")
+    if isinstance(direct, str) and direct.strip():
+        return direct
+    content = candidate.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                return text
+    return ""
 
 
 _METADATA_PRODUCT_KEYS = ("product_id", "productId", "product")
@@ -408,6 +521,7 @@ async def _process_message_creation(
         ProviderThreadState.thread_id == thread.id,
         ProviderThreadState.provider == provider_key,
     )
+    provider_attachments_buffer: dict[str, dict[str, Any]] = {}
     conversation_state = session.exec(conversation_state_stmt).one_or_none()
     active_conversation_id = conversation_state.conversation_id if conversation_state else None
 
@@ -442,6 +556,7 @@ async def _process_message_creation(
                 filename=attachment_payload.filename,
                 content_type=attachment_payload.content_type or "application/octet-stream",
                 data=binary,
+                size_bytes=len(binary),
             )
             session.add(attachment)
             new_attachments.append(attachment)
@@ -538,6 +653,14 @@ async def _process_message_creation(
                 target_status.value,
             )
 
+        async def handle_stream_chunk(chunk: dict[str, Any]) -> None:
+            _collect_provider_attachments(provider_attachments_buffer, chunk)
+            if chunk_callback is None:
+                return
+            result = chunk_callback(chunk)
+            if inspect.isawaitable(result):
+                await result
+
         completion = await chat_service.create_completion(
             model=model_name,
             messages=prompt_messages,
@@ -545,7 +668,7 @@ async def _process_message_creation(
             conversation_id=active_conversation_id,
             stream=True,
             on_status=handle_agent_status,
-            on_chunk=chunk_callback,
+            on_chunk=handle_stream_chunk,
         )
         logger.info(
             "OpenAI-compatible completion succeeded: thread_id=%s model=%s response_id=%s conversation_id=%s",
@@ -628,6 +751,14 @@ async def _process_message_creation(
         tokens_count=assistant_tokens,
         correlation_id=completion.response_id or None,
     )
+
+    provider_attachment_payloads = list(provider_attachments_buffer.values())
+    if provider_attachment_payloads:
+        _persist_provider_attachments(
+            session=session,
+            message=assistant_message,
+            attachments=provider_attachment_payloads,
+        )
 
     if completion.conversation_id:
         if conversation_state is None:
@@ -736,6 +867,28 @@ async def stream_message(
         if isinstance(status, str):
             last_status["value"] = status.lower()
         await queue.put(json.dumps(chunk, separators=(",", ":")))
+        metadata = chunk.get("message_metadata")
+        attachments_preview: list[dict[str, Any]] = []
+        if isinstance(metadata, dict):
+            attachments = metadata.get("attachments")
+            if isinstance(attachments, list):
+                for attachment in attachments:
+                    if isinstance(attachment, dict):
+                        attachments_preview.append(
+                            {
+                                "filename": attachment.get("filename"),
+                                "bytes": attachment.get("bytes"),
+                                "download_url": attachment.get("download_url"),
+                            }
+                        )
+        text_preview = _truncate(_extract_chunk_text(chunk), 160)
+        logger.info(
+            "Forwarded agent chunk to client: thread_id=%s status=%s text_preview=%s attachments=%s",
+            thread.id,
+            status or last_status["value"] or "n/a",
+            text_preview,
+            attachments_preview,
+        )
 
     initial_chunk = {
         "id": str(thread_id),
