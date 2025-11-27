@@ -108,6 +108,44 @@ class FailingStubLLM:
         raise LLMServiceError("LLM failure")
 
 
+class InterruptStubLLM:
+    async def create_completion(
+        self,
+        *,
+        model: str,
+        messages,
+        user=None,
+        conversation_id=None,
+        stream=False,
+        on_status=None,
+        on_chunk=None,
+    ):
+        return ChatCompletionResult(
+            response_id="resp-int",
+            content="Can you clarify?",
+            role="assistant",
+            model=model,
+            conversation_id=conversation_id or "conv-int",
+            usage={
+                "prompt_tokens": 5,
+                "completion_tokens": 3,
+                "total_tokens": 8,
+            },
+            metadata={
+                "interrupt_id": "int-1",
+                "interrupt_payload": {
+                    "interrupt_id": "int-1",
+                    "question": "Can you clarify?",
+                    "content": "Detailed interrupt content",
+                },
+            },
+            agent_status="interrupted",
+        )
+
+    async def list_models(self):
+        return [ProviderModelCard(id="stub-model", name="Stub Model")]
+
+
 class StubSearchIndex:
     def __init__(self):
         self.messages: dict[str, dict[str, str | None]] = {}
@@ -479,6 +517,40 @@ def test_conversation_id_reused_between_messages():
 
             assert recorded_conversation_ids[0] is None
             assert recorded_conversation_ids[1] == "conv-1"
+    finally:
+        app.dependency_overrides.pop(get_search_index_service, None)
+        app.dependency_overrides.pop(get_optional_search_index_service, None)
+        app.dependency_overrides.pop(get_chat_service, None)
+        engine.dispose()
+
+
+def test_interrupt_metadata_persisted_and_exposed():
+    stub = InterruptStubLLM()
+    search_stub = StubSearchIndex()
+    app.dependency_overrides[get_chat_service] = lambda: stub
+    app.dependency_overrides[get_search_index_service] = lambda: search_stub
+    app.dependency_overrides[get_optional_search_index_service] = lambda: search_stub
+
+    try:
+        with TestClient(app) as client:
+            user = authenticate_client(client)
+            create_resp = client.post("/api/threads", json={"title": "Interrupt"})
+            thread_id = create_resp.json()["id"]
+
+            message_payload = {"text": "Please clarify", "user_id": str(user.id), "model": "stub-model"}
+            post_resp = client.post(f"/api/threads/{thread_id}/messages", json=message_payload)
+            assert post_resp.status_code == 201
+
+            history_resp = client.get(f"/api/threads/{thread_id}/messages")
+            assert history_resp.status_code == 200
+            items = history_resp.json()["items"]
+            assert len(items) == 2
+            assistant_message = items[0]
+            user_message = items[1]
+            assert assistant_message["sender_type"] == "assistant"
+            assert assistant_message["metadata"]["interrupt_id"] == "int-1"
+            assert assistant_message["text"] == "Detailed interrupt content"
+            assert user_message["metadata"] == {}
     finally:
         app.dependency_overrides.pop(get_search_index_service, None)
         app.dependency_overrides.pop(get_optional_search_index_service, None)

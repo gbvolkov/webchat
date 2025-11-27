@@ -98,6 +98,10 @@ class Message(SQLModel, table=True):
         ),
     )
     text: str = Field(nullable=False)
+    meta: dict = Field(
+        default_factory=dict,
+        sa_column=Column("metadata", JSON, nullable=False, server_default="{}"),
+    )
     tokens_count: Optional[int] = Field(default=None, nullable=True)
     error_code: Optional[str] = Field(default=None, max_length=128)
     correlation_id: Optional[str] = Field(default=None, max_length=255, index=True)

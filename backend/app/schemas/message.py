@@ -19,6 +19,7 @@ class MessageBase(BaseModel):
     correlation_id: Optional[str] = Field(default=None, max_length=255)
     error_code: Optional[str] = Field(default=None, max_length=128)
     tokens_count: Optional[int] = Field(default=None, ge=0)
+    metadata: dict = Field(default_factory=dict, validation_alias="meta")
 
 
 class MessageCreate(MessageBase):

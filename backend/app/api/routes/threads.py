@@ -232,6 +232,47 @@ def _extract_text_from_candidate(candidate: Any) -> str:
     return ""
 
 
+def _enrich_interrupt_chunk_content(chunk: dict[str, Any]) -> dict[str, Any]:
+    status = chunk.get("agent_status")
+    if not isinstance(status, str) or status.lower() != "interrupted":
+        return chunk
+    metadata = chunk.get("message_metadata")
+    if not isinstance(metadata, dict):
+        return chunk
+    payload = metadata.get("interrupt_payload")
+    content: str | None = None
+    if isinstance(payload, dict):
+        for key in ("content", "question"):
+            candidate = payload.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                content = candidate.strip()
+                break
+    if content is None:
+        for key in ("content", "question"):
+            candidate = metadata.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                content = candidate.strip()
+                break
+    if not content:
+        return chunk
+    choices = chunk.get("choices")
+    if not isinstance(choices, list) or not choices:
+        chunk["choices"] = [{"delta": {"content": content}, "finish_reason": None}]
+        return chunk
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            delta["content"] = content
+        else:
+            choice["delta"] = {"content": content}
+        message = choice.get("message")
+        if isinstance(message, dict):
+            message["content"] = content
+    return chunk
+
+
 _METADATA_PRODUCT_KEYS = ("product_id", "productId", "product")
 _METADATA_AGENT_KEYS = ("agent_id", "agentId", "agent")
 
@@ -531,6 +572,7 @@ async def _process_message_creation(
         sender_type=payload.sender_type,
         status=MessageStatus.QUEUED,
         text=payload.text,
+        meta=payload.metadata or {},
         tokens_count=payload.tokens_count,
         correlation_id=payload.correlation_id,
         error_code=payload.error_code,
@@ -578,6 +620,7 @@ async def _process_message_creation(
             ChatPromptMessage(
                 role=_ROLE_BY_SENDER.get(msg.sender_type, "user"),
                 parts=_build_prompt_parts(msg, attachments_map.get(msg.id, [])),
+                metadata=msg.meta or None,
             )
             for msg in history
         ]
@@ -654,6 +697,7 @@ async def _process_message_creation(
             )
 
         async def handle_stream_chunk(chunk: dict[str, Any]) -> None:
+            chunk = _enrich_interrupt_chunk_content(chunk)
             _collect_provider_attachments(provider_attachments_buffer, chunk)
             if chunk_callback is None:
                 return
@@ -670,6 +714,11 @@ async def _process_message_creation(
             on_status=handle_agent_status,
             on_chunk=handle_stream_chunk,
         )
+        if completion.agent_status and completion.agent_status.lower() == "interrupted":
+            completion.content = OpenAIChatService._extract_interrupt_text(
+                completion.metadata if isinstance(completion.metadata, dict) else None,
+                completion.content,
+            )
         logger.info(
             "OpenAI-compatible completion succeeded: thread_id=%s model=%s response_id=%s conversation_id=%s",
             thread.id,
@@ -748,9 +797,19 @@ async def _process_message_creation(
         sender_type=SenderType.ASSISTANT,
         status=MessageStatus.READY,
         text=completion.content,
+        meta=completion.metadata or {},
         tokens_count=assistant_tokens,
         correlation_id=completion.response_id or None,
     )
+
+    if isinstance(completion.metadata, dict):
+        attachments_meta = completion.metadata.get("attachments")
+        if isinstance(attachments_meta, list):
+            for attachment in attachments_meta:
+                if not isinstance(attachment, dict):
+                    continue
+                key = attachment.get("storage_filename") or f"{attachment.get('filename')}:{len(provider_attachments_buffer)}"
+                provider_attachments_buffer.setdefault(key, attachment)
 
     provider_attachment_payloads = list(provider_attachments_buffer.values())
     if provider_attachment_payloads:
@@ -946,7 +1005,7 @@ async def stream_message(
                 search_index=search_index,
                 chunk_callback=forward_chunk,
             )
-            if last_status["value"] != "completed":
+            if last_status["value"] not in {"completed", "interrupted"}:
                 completion_chunk = {
                     "id": str(thread_id),
                     "object": "chat.completion.chunk",

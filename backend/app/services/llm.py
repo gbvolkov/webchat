@@ -43,6 +43,7 @@ ChatRole = Literal["system", "user", "assistant"]
 class ChatPromptMessage:
     role: ChatRole
     parts: list[dict[str, Any]]
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -53,6 +54,8 @@ class ChatCompletionResult:
     model: str
     conversation_id: str | None
     usage: dict[str, int | None]
+    metadata: dict[str, Any] | None = None
+    agent_status: str | None = None
 
 
 @dataclass(slots=True)
@@ -122,7 +125,11 @@ class OpenAIChatService:
         payload = {
             "model": model,
             "messages": [
-                {"role": message.role, "content": message.parts}
+                {
+                    "role": message.role,
+                    "content": message.parts,
+                    **({"metadata": message.metadata} if message.metadata else {}),
+                }
                 for message in messages
             ],
         }
@@ -369,6 +376,22 @@ class OpenAIChatService:
 
         content = message.get("content", "")
         role: ChatRole = message.get("role", "assistant")
+        metadata: dict[str, Any] | None = None
+        for candidate in (
+            message.get("metadata"),
+            message.get("message_metadata"),
+            data.get("message_metadata"),
+        ):
+            if isinstance(candidate, dict):
+                metadata = candidate
+                break
+        agent_status = data.get("agent_status")
+        if isinstance(agent_status, str):
+            agent_status = agent_status.lower()
+        else:
+            agent_status = None
+        if agent_status == "interrupted":
+            content = self._extract_interrupt_text(metadata, content)
 
         logger.info(
             "Received OpenAI-compatible response: model=%s response_id=%s role=%s conversation_id=%s",
@@ -400,6 +423,8 @@ class OpenAIChatService:
             model=data.get("model", model),
             conversation_id=data.get("conversation_id"),
             usage=usage,
+            metadata=metadata,
+            agent_status=agent_status,
         )
         self._trace_json(
             "Non-streaming final result",
@@ -409,6 +434,7 @@ class OpenAIChatService:
                 "model": result.model,
                 "conversation_id": result.conversation_id,
                 "usage": result.usage,
+                "agent_status": result.agent_status,
                 "content_preview": self._truncate_text(result.content, 200),
             },
         )
@@ -616,6 +642,22 @@ class OpenAIChatService:
                 text = str(data)
         return OpenAIChatService._truncate_text(text, max_length)
 
+    @staticmethod
+    def _extract_interrupt_text(metadata: dict[str, Any] | None, fallback: str) -> str:
+        if not isinstance(metadata, dict):
+            return fallback
+        payload = metadata.get("interrupt_payload")
+        if isinstance(payload, dict):
+            for key in ("content", "question"):
+                candidate = payload.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+        for key in ("content", "question"):
+            candidate = metadata.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return fallback
+
     def _log_request(self, endpoint: str, payload: dict[str, Any]) -> None:
         self._trace("Preparing request to endpoint=%s", endpoint)
         self._trace_json("HTTP request payload", payload)
@@ -700,8 +742,31 @@ class OpenAIChatService:
     async def _persist_chunk_attachments(self, payload: dict[str, Any]) -> None:
         if self._attachments_dir is None:
             return
-        metadata = payload.get("message_metadata")
-        if not isinstance(metadata, dict):
+        metadata: dict[str, Any] | None = None
+        if isinstance(payload.get("message_metadata"), dict):
+            metadata = payload["message_metadata"]
+        else:
+            message_obj = payload.get("message")
+            if isinstance(message_obj, dict):
+                candidate = message_obj.get("metadata") or message_obj.get("message_metadata")
+                if isinstance(candidate, dict):
+                    metadata = candidate
+            if metadata is None:
+                choices = payload.get("choices")
+                if isinstance(choices, list):
+                    for choice in choices:
+                        if not isinstance(choice, dict):
+                            continue
+                        message_candidate = choice.get("message")
+                        if isinstance(message_candidate, dict):
+                            candidate = (
+                                message_candidate.get("metadata")
+                                or message_candidate.get("message_metadata")
+                            )
+                            if isinstance(candidate, dict):
+                                metadata = candidate
+                                break
+        if metadata is None:
             return
         attachments = metadata.get("attachments")
         if not isinstance(attachments, list) or not attachments:
@@ -807,6 +872,7 @@ class _StreamingCompletionParser:
         self._model: str | None = None
         self._response_id: str | None = None
         self._conversation_id: str | None = None
+        self._metadata: dict[str, Any] | None = None
         self._usage: dict[str, int | None] = {
             "prompt_tokens": None,
             "completion_tokens": None,
@@ -904,6 +970,11 @@ class _StreamingCompletionParser:
                     self._finish_reason = finish_reason
                     self._trace("Received finish_reason=%s", self._finish_reason)
 
+        metadata = payload.get("message_metadata")
+        if isinstance(metadata, dict):
+            self._metadata = metadata
+            self._trace("Updated streaming metadata keys=%s", list(metadata.keys()))
+
     async def _emit_status(self, status: str) -> None:
         normalised = status.lower()
         if self.last_status == normalised:
@@ -931,13 +1002,21 @@ class _StreamingCompletionParser:
     def finalise(self) -> ChatCompletionResult:
         if self._finish_reason and self._finish_reason not in {"stop", "length"}:
             logger.warning("LLM completion finished with reason=%s", self._finish_reason)
+        raw_content = "".join(self._content_parts)
+        content = (
+            OpenAIChatService._extract_interrupt_text(self._metadata, raw_content)
+            if (self.last_status or "").lower() == "interrupted"
+            else raw_content
+        )
         return ChatCompletionResult(
             response_id=self._response_id or "",
-            content="".join(self._content_parts),
+            content=content,
             role=self._role,
             model=self._model or self._default_model,
             conversation_id=self._conversation_id,
             usage=self._usage,
+            metadata=self._metadata,
+            agent_status=self.last_status,
         )
 
     def _trace(self, message: str, *args: Any) -> None:

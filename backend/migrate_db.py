@@ -136,11 +136,20 @@ def migration_001_message_attachment_links(conn: Connection) -> None:
     _ensure_attachment_data_nullable(conn, dialect_name)
 
 
+def migration_002_message_metadata(conn: Connection) -> None:
+    _ensure_column(conn, "messages", "metadata", "JSON NOT NULL DEFAULT '{}'")
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         id="001_message_attachment_links",
         description="Add storage metadata to message_attachments and allow null binary data",
         apply=migration_001_message_attachment_links,
+    ),
+    Migration(
+        id="002_message_metadata",
+        description="Add metadata column to messages for provider data",
+        apply=migration_002_message_metadata,
     ),
 ]
 
