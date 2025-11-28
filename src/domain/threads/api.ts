@@ -1,5 +1,11 @@
 import { DefaultAPIInstance } from '@/api/instance'
-import type { MessageListResponse, ThreadDetail, ThreadListResponse, ThreadSearchResponse } from './types'
+import type {
+    MessageListResponse,
+    ThreadDetail,
+    ThreadListResponse,
+    ThreadSearchResponse,
+    ThreadExportFormat,
+} from './types'
 
 export const ThreadsApi = {
     getThreads(page = 1, limit = 20) {
@@ -30,6 +36,13 @@ export const ThreadsApi = {
     getThreadMessages(threadId: string, page = 1, limit = 20) {
         return DefaultAPIInstance.get<MessageListResponse>(`/threads/${threadId}/messages`, {
             params: { page, limit },
+        })
+    },
+
+    exportThread(threadId: string, format: ThreadExportFormat) {
+        return DefaultAPIInstance.get<Blob>(`/threads/${threadId}/export`, {
+            params: { format },
+            responseType: 'blob',
         })
     },
 

@@ -73,3 +73,5 @@ export interface MessageAttachmentDTO {
     download_url?: string | null
     created_at: string
 }
+
+export type ThreadExportFormat = 'pdf' | 'markdown' | 'docx'

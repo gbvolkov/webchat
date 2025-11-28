@@ -5,14 +5,28 @@ import base64
 import binascii
 import contextlib
 import inspect
+import io
 import json
 import logging
+import textwrap
+from html import escape
+import os
+from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import quote
 from uuid import UUID
 
+import markdown as md
+import markdown2
+from markdown_pdf import MarkdownPdf, Section
+from html2docx import html2docx as html_to_docx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, func, select
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
 
 from app.api.deps import (
     ensure_agent_access,
@@ -41,9 +55,284 @@ from app.schemas.auth import AuthenticatedUser
 router = APIRouter(prefix="/threads", tags=["threads"])
 
 _DEFAULT_PROVIDER = "openai-compatible"
+BUNDLED_FONT_PATH = (
+    Path(__file__).resolve().parent.parent / "static" / "fonts" / "DejaVuSans.ttf"
+)
 _DEFAULT_THREAD_PREFIX = "Product"
-
 logger = logging.getLogger(__name__)
+
+_FONTS_REGISTERED = False
+
+
+def _fonts_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / "static" / "fonts"
+
+
+def _discover_font_path() -> Path | None:
+    candidates: list[Path] = [
+        _fonts_dir() / "DejaVuSans.ttf",
+        _fonts_dir() / "DejaVuSans-Bold.ttf",
+        #BUNDLED_FONT_PATH,
+        #Path("C:/Windows/Fonts/arial.ttf"),
+        #Path("C:/Windows/Fonts/arialuni.ttf"),
+        #Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        #Path("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _sanitize_export_filename(title: str | None, thread_id: UUID) -> str:
+    raw = _sanitize_title_fragment(title or "").replace(" ", "_")
+    ascii_only = "".join(ch for ch in raw if ch.isascii() and (ch.isalnum() or ch in ("_", "-", ".")))
+    if not ascii_only:
+        ascii_only = str(thread_id)
+    return ascii_only.strip("._") or str(thread_id)
+
+
+def _build_content_disposition(filename_ascii: str, filename_utf8: str | None = None) -> str:
+    parts = [f'attachment; filename="{filename_ascii}"']
+    if filename_utf8:
+        parts.append(f"filename*=UTF-8''{quote(filename_utf8)}")
+    return "; ".join(parts)
+
+
+def _render_markdown_export(
+    thread: Thread,
+    messages: Sequence[Message],
+    attachments_map: dict[UUID, list[MessageAttachment]],
+) -> str:
+    lines: list[str] = []
+    title = thread.title or f"Thread {thread.id}"
+    lines.append(f"# {title}")
+    lines.append("")
+    lines.append(f"- Thread ID: {thread.id}")
+    lines.append(f"- Created at: {thread.created_at.isoformat()}")
+    lines.append(f"- Updated at: {thread.updated_at.isoformat()}")
+    if thread.attributes:
+        for key, value in thread.attributes.items():
+            lines.append(f"- {key}: {value}")
+    lines.append("")
+    lines.append("## Messages")
+    lines.append("")
+
+    for msg in messages:
+        sender = msg.sender_type.value if hasattr(msg.sender_type, "value") else str(msg.sender_type)
+        lines.append(f"### {msg.created_at.isoformat()} — {sender}")
+        lines.append("")
+        text_lines = (msg.text or "").splitlines() or [""]
+        lines.extend(text_lines)
+
+        attachments = attachments_map.get(msg.id, [])
+        if attachments:
+            lines.append("")
+            lines.append("Attachments:")
+            for attachment in attachments:
+                download_url = _build_attachment_download_url(attachment.storage_filename)
+                suffix = f" ({attachment.content_type})"
+                if download_url:
+                    lines.append(f"- [{attachment.filename}]({download_url}){suffix}")
+                else:
+                    lines.append(f"- {attachment.filename}{suffix}")
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def _register_reportlab_font(font_path: Path | None, alias: str = "ExportFont") -> str:
+    if not font_path:
+        return "Helvetica"
+    try:
+        pdfmetrics.registerFont(TTFont(alias, str(font_path)))
+        pdfmetrics.registerFontFamily(alias, normal=alias, bold=alias, italic=alias, boldItalic=alias)
+        return alias
+    except Exception:
+        logger.debug("Failed to register reportlab font at %s", font_path, exc_info=True)
+        return "Helvetica"
+
+
+def _register_local_fonts() -> str:
+    global _FONTS_REGISTERED
+    if _FONTS_REGISTERED:
+        return "DejaVuSans"
+
+    fonts_dir = _fonts_dir()
+    regular = fonts_dir / "DejaVuSans.ttf"
+    bold = fonts_dir  / "DejaVuSans-Bold.ttf"
+    italic = fonts_dir  / "DejaVuSans-Oblique.ttf"
+    bold_italic = fonts_dir  / "DejaVuSans-BoldOblique.ttf"
+
+    missing = [p for p in (regular, bold, italic, bold_italic) if not p.exists()]
+    if missing:
+        logger.error("Missing font files for PDF export: %s", missing)
+
+    pdfmetrics.registerFont(TTFont("DejaVuSans", str(regular)))
+    if bold.exists():
+        pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", str(bold)))
+    if italic.exists():
+        pdfmetrics.registerFont(TTFont("DejaVuSans-Italic", str(italic)))
+    if bold_italic.exists():
+        pdfmetrics.registerFont(TTFont("DejaVuSans-BoldItalic", str(bold_italic)))
+
+    pdfmetrics.registerFontFamily(
+        "DejaVuSans",
+        normal="DejaVuSans",
+        bold="DejaVuSans-Bold" if bold.exists() else "DejaVuSans",
+        italic="DejaVuSans-Italic" if italic.exists() else "DejaVuSans",
+        boldItalic="DejaVuSans-BoldItalic" if bold_italic.exists() else "DejaVuSans",
+    )
+    _FONTS_REGISTERED = True
+    return "DejaVuSans"
+
+
+def _build_plain_pdf(markdown_text: str, *, title: str, font_path: Path | None) -> bytes:
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    font_name = _register_local_fonts()
+    font_size = 11
+    leading = 16
+
+    c.setTitle(title)
+    c.setAuthor("GWP Chat")
+    c.setFont(font_name, font_size)
+
+    def new_text_obj():
+        obj = c.beginText()
+        obj.setTextOrigin(40, 780)
+        obj.setLeading(leading)
+        return obj
+
+    text_obj = new_text_obj()
+
+    def flush_page(obj):
+        c.drawText(obj)
+        c.showPage()
+        c.setFont(font_name, font_size)
+        return new_text_obj()
+
+    for paragraph in markdown_text.splitlines():
+        if not paragraph:
+            text_obj.textLine("")
+        else:
+            wrapped_lines = textwrap.wrap(paragraph, width=110) or [paragraph]
+            for line in wrapped_lines:
+                try:
+                    text_obj.textLine(line)
+                except Exception:
+                    text_obj.textLine(line.encode("latin-1", errors="replace").decode("latin-1"))
+        if text_obj.getY() <= 40:
+            text_obj = flush_page(text_obj)
+
+    text_obj = flush_page(text_obj)
+    c.save()
+    return buffer.getvalue()
+
+
+def _quiet_markdown_logging() -> None:
+    """Suppress verbose markdown-it debug logs during PDF generation."""
+    for name in ("markdown_it", "markdown_it.rules_block"):
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.WARNING)
+
+
+def _build_pdf_from_markdown(markdown_text: str, *, title: str) -> bytes:
+    _quiet_markdown_logging()
+    pdf = MarkdownPdf(toc_level=0)
+    pdf.meta["title"] = title or "Thread export"
+
+    fonts_dir = _fonts_dir()
+    regular = fonts_dir / "DejaVuSans.ttf"
+    bold = fonts_dir / "DejaVuSans-Bold.ttf"
+    italic = fonts_dir / "DejaVuSans-Oblique.ttf"
+    bold_italic = fonts_dir / "DejaVuSans-BoldOblique.ttf"
+
+    font_face = ""
+    try:
+        if regular.exists():
+            font_face += (
+                "@font-face { font-family: 'DejaVuSans'; font-style: normal; font-weight: normal; "
+                f"src: url('{regular.resolve().as_uri()}') format('truetype'); }} "
+            )
+        if bold.exists():
+            font_face += (
+                "@font-face { font-family: 'DejaVuSans'; font-style: normal; font-weight: bold; "
+                f"src: url('{bold.resolve().as_uri()}') format('truetype'); }} "
+            )
+        if italic.exists():
+            font_face += (
+                "@font-face { font-family: 'DejaVuSans'; font-style: italic; font-weight: normal; "
+                f"src: url('{italic.resolve().as_uri()}') format('truetype'); }} "
+            )
+        if bold_italic.exists():
+            font_face += (
+                "@font-face { font-family: 'DejaVuSans'; font-style: italic; font-weight: bold; "
+                f"src: url('{bold_italic.resolve().as_uri()}') format('truetype'); }} "
+            )
+    except Exception:
+        font_face = ""
+
+    stylesheet = f"""
+    {font_face}
+    @page {{
+        size: A4;
+        margin: 20mm;
+    }}
+    body {{
+        font-family: 'DejaVuSans';
+        font-size: 11pt;
+        line-height: 1.4;
+        color: #111;
+    }}
+    h1, h2, h3, h4 {{
+        font-family: 'DejaVuSans';
+        font-weight: bold;
+        margin-top: 12pt;
+        margin-bottom: 6pt;
+        color: #111;
+    }}
+    strong {{ font-weight: bold; }}
+    em {{ font-style: italic; }}
+    code, pre {{ font-family: 'DejaVuSans'; }}
+    """
+
+    section = Section(markdown_text, toc=False)
+    pdf.add_section(section, user_css=stylesheet)
+
+    buffer = io.BytesIO()
+    pdf.save_bytes(buffer)
+    return buffer.getvalue()
+
+
+def _build_docx_from_markdown(markdown_text: str, *, title: str) -> bytes:
+    _quiet_markdown_logging()
+    html_body = md.markdown(
+        markdown_text,
+        extensions=["extra", "sane_lists", "tables"],
+        output_format="html",
+    )
+    html = f"<html><head><meta charset='utf-8'><title>{escape(title)}</title></head><body>{html_body}</body></html>"
+
+    try:
+        buf = html_to_docx(html, title=title or "Thread export")
+        return buf.getvalue()
+    except Exception:
+        logger.exception("Failed to render DOCX export, falling back to plain text docx")
+
+    try:
+        from docx import Document
+
+        buffer = io.BytesIO()
+        doc = Document()
+        doc.core_properties.title = title or "Thread export"
+        for line in markdown_text.splitlines():
+            doc.add_paragraph(line)
+        doc.save(buffer)
+        return buffer.getvalue()
+    except Exception:
+        logger.exception("Failed to render fallback DOCX export")
+        return markdown_text.encode("utf-8", errors="replace")
 
 
 def _get_message_attachments(session: Session, message_ids: Sequence[UUID]) -> dict[UUID, list[MessageAttachment]]:
@@ -500,6 +789,53 @@ def list_messages(
     return PaginatedResponse[MessageRead](
         items=message_items,
         pagination=pagination,
+    )
+
+
+@router.get("/{thread_id}/export")
+def export_thread(
+    thread_id: UUID,
+    format: str = Query(default="markdown", pattern="^(pdf|markdown|docx)$"),
+    session: Session = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> Response:
+    user_id = current_user.user_id
+    thread = _ensure_thread(session, thread_id, user_id)
+    _enforce_metadata_permissions(current_user, thread.attributes)
+
+    messages: list[Message] = session.exec(
+        select(Message).where(Message.thread_id == thread_id).order_by(Message.created_at.asc())
+    ).all()
+    attachments_map = _get_message_attachments(session, [msg.id for msg in messages])
+
+    markdown_text = _render_markdown_export(thread, messages, attachments_map)
+    filename_base = _sanitize_export_filename(thread.title, thread.id)
+
+    ext = "md" if format == "markdown" else "pdf" if format == "pdf" else "docx"
+    utf8_filename = f"{thread.title or thread.id}.{ext}"
+    if format == "markdown":
+        disposition = _build_content_disposition(f"{filename_base}.md", utf8_filename)
+        return Response(
+            content=markdown_text,
+            media_type="text/markdown",
+            headers={"Content-Disposition": disposition},
+        )
+
+    if format == "pdf":
+        pdf_bytes = _build_pdf_from_markdown(markdown_text, title=thread.title or str(thread.id))
+        disposition = _build_content_disposition(f"{filename_base}.pdf", utf8_filename)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": disposition},
+        )
+
+    docx_bytes = _build_docx_from_markdown(markdown_text, title=thread.title or str(thread.id))
+    disposition = _build_content_disposition(f"{filename_base}.docx", utf8_filename)
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": disposition},
     )
 
 
@@ -1132,3 +1468,16 @@ def update_message(
         session.refresh(message)
 
     return MessageRead.model_validate(message)
+def _pisa_link_callback(uri: str, rel: str) -> str:
+    if not isinstance(uri, str):
+        return uri
+    if uri.startswith("file:"):
+        path = uri[5:]
+        if path.startswith("//"):
+            path = path[2:]
+        if path.startswith("/"):
+            path = path[1:]
+        if os.name == "nt" and path.startswith("/") and len(path) > 2 and path[2] == ":":
+            path = path[1:]
+        return path
+    return uri

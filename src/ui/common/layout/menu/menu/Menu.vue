@@ -16,6 +16,8 @@ import { EventKeys } from '@/ui/common/layout/menu/types'
 import { useAuthStore } from '@/store/auth-store'
 import { ThreadsApi } from '@/domain/threads/api'
 import { LanguageSwitcher } from '@/ui/common/language-switcher'
+import type { ThreadExportFormat } from '@/domain/threads/types'
+import { downloadBlobAsFile } from '@/utils/download-file'
 
 const route = useRoute()
 const router = useRouter()
@@ -129,6 +131,20 @@ const whenClickThread = (id: string) => {
 
 const whenClickLogo = () => router.push({ name: Routes.Chat })
 
+const handleExportThread = async (id: string, format: ThreadExportFormat) => {
+  const extension = format === 'pdf' ? 'pdf' : format === 'docx' ? 'docx' : 'md'
+  const filename = `thread-${id}.${extension}`
+  try {
+    const { data } = await ThreadsApi.exportThread(id, format)
+    const blob = data instanceof Blob ? data : new Blob([data])
+    downloadBlobAsFile(blob, filename)
+    message.success(t('threads.notifications.exportSuccess'))
+  } catch (error) {
+    message.error(t('threads.notifications.exportFailed'))
+    console.error('Failed to export thread', error)
+  }
+}
+
 const handleDeleteThread = (id: string) => {
   Modal.confirm({
     title: t('common.confirmations.deleteChat.title'),
@@ -205,6 +221,7 @@ onBeforeUnmount(() => {
         :whenClickItem="whenClickThread"
         :selectedThreadId="selectedThreadId"
         :whenDeleteThread="handleDeleteThread"
+        :whenExportThread="handleExportThread"
     />
 
     <div class="MenuWrapper__language">

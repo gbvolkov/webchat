@@ -58,6 +58,17 @@
     untitled: 'Новый чат',
     fallbackTitle: 'Тред {id}',
     deleteTooltip: 'Удалить чат',
+    actions: {
+      openMenu: 'Дополнительные действия',
+      exportPdf: 'Выгрузить в PDF',
+      exportMarkdown: 'Выгрузить в Markdown',
+      exportDocx: 'Выгрузить в DOCX',
+      delete: 'Удалить чат',
+    },
+    notifications: {
+      exportSuccess: 'Выгрузка запущена',
+      exportFailed: 'Не удалось выгрузить тред',
+    },
   },
   pages: {
     chat: {

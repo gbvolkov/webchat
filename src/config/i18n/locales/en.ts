@@ -58,6 +58,17 @@
     untitled: 'New chat',
     fallbackTitle: 'Thread {id}',
     deleteTooltip: 'Delete chat',
+    actions: {
+      openMenu: 'More actions',
+      exportPdf: 'Export as PDF',
+      exportMarkdown: 'Export as Markdown',
+      exportDocx: 'Export as DOCX',
+      delete: 'Delete chat',
+    },
+    notifications: {
+      exportSuccess: 'Export started',
+      exportFailed: 'Failed to export chat',
+    },
   },
   pages: {
     chat: {

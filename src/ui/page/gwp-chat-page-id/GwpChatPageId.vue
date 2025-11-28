@@ -5,6 +5,7 @@ import { message } from 'ant-design-vue'
 import { isAxiosError } from 'axios'
 import { useAuthStore } from '@/store/auth-store'
 import { mapThreadInfoToMessageContent } from '@/domain/threads/mapper'
+import type { MessageDTO } from '@/domain/threads/types'
 import { useRoute } from 'vue-router'
 import { Chat } from '@/ui/widget/chat'
 import { ThreadsApi } from '@/domain/threads/api'
@@ -46,6 +47,30 @@ const chatId = computed(() => route.params.id as string | undefined)
 const isLoading = computed(() => componentStatus.value === ComponentStatus.LOADING)
 const hasError = computed(() => componentStatus.value === ComponentStatus.ERROR_LOADING)
 const isEmpty = computed(() => messageHistory.value.length === 0)
+
+const loadAllThreadMessages = async (threadId: string, pageSize = 100, maxPages = 50): Promise<TMessageContent[]> => {
+  const collected: MessageDTO[] = []
+  let page = 1
+  let hasMore = true
+  let pagesFetched = 0
+
+  while (hasMore && pagesFetched < maxPages) {
+    pagesFetched += 1
+    try {
+      const { data } = await ThreadsApi.getThreadMessages(threadId, page, pageSize)
+      collected.push(...(data.items ?? []))
+
+      const pagination = data.pagination
+      hasMore = Boolean(pagination?.has_more)
+      page = (pagination?.page ?? page) + 1
+    } catch (error) {
+      console.error('Failed to load thread messages', error)
+      break
+    }
+  }
+
+  return mapThreadInfoToMessageContent(collected)
+}
 
 const ensureSelectedModel = (preferred?: string | null) => {
   if (typeof preferred === 'string' && preferred.length > 0) {
@@ -117,15 +142,13 @@ const loadThreadData = async () => {
   componentStatus.value = ComponentStatus.LOADING
 
   try {
-    const [messagesResponse, threadResponse] = await Promise.all([
-      ThreadsApi.getThreadMessages(chatId.value).catch((error) => {
-        console.error('Failed to load thread messages', error)
-        return { data: { items: [], pagination: { total: 0, page: 1, limit: 20, has_more: false } } }
-      }),
-      ThreadsApi.getThread(chatId.value),
+    const threadRequest = ThreadsApi.getThread(chatId.value)
+    const [messages, threadResponse] = await Promise.all([
+      loadAllThreadMessages(chatId.value),
+      threadRequest,
     ])
 
-    messageHistory.value = mapThreadInfoToMessageContent(messagesResponse.data.items ?? [])
+    messageHistory.value = messages
     threadMetadata.value = (threadResponse.data.metadata ?? {}) as Record<string, unknown>
 
     const newTitle = (threadResponse.data.title as string | undefined) ?? ''

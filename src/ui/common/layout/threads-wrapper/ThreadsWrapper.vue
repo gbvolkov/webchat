@@ -2,7 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { ThreadsApi } from '@/domain/threads/api'
 import ThreadItem from './ThreadItem.vue'
-import type { ThreadSummary } from '@/domain/threads/types'
+import type { ThreadSummary, ThreadExportFormat } from '@/domain/threads/types'
 import { useAuthStore } from '@/store/auth-store'
 
 const threadItems = ref<ThreadSummary[]>([])
@@ -12,6 +12,7 @@ interface Props {
   whenClickItem: (id: string) => void
   selectedThreadId: string
   whenDeleteThread?: (id: string) => Promise<void> | void
+  whenExportThread?: (id: string, format: ThreadExportFormat) => Promise<void> | void
 }
 
 const props = defineProps<Props>()
@@ -70,6 +71,7 @@ const handleDeleteThread = async (id: string) => {
          :is-selected="threadItem.id === props.selectedThreadId"
          :when-click-thread-item="() => whenClickItem(threadItem.id)"
          :when-delete-thread="handleDeleteThread"
+         :when-export-thread="props.whenExportThread"
      />
   </div>
 </template>

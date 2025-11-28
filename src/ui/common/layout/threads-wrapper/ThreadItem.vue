@@ -1,7 +1,7 @@
 <script lang="ts" setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { ThreadSummary } from '@/domain/threads/types'
+import type { ThreadSummary, ThreadExportFormat } from '@/domain/threads/types'
 import TextView from '@/ui/common/text-view/TextView.vue'
 
 interface Props {
@@ -9,10 +9,14 @@ interface Props {
   isSelected: boolean
   whenClickThreadItem: () => void
   whenDeleteThread?: (id: string) => Promise<void> | void
+  whenExportThread?: (id: string, format: ThreadExportFormat) => Promise<void> | void
 }
 
 const props = defineProps<Props>()
 const { t, locale } = useI18n()
+
+const isActionsOpen = ref(false)
+const itemRef = ref<HTMLElement | null>(null)
 
 const title = computed(() => {
   void locale.value
@@ -27,24 +31,50 @@ const subtitle = computed(() => {
   if (typeof topic === 'string' && topic.trim().length > 0) return topic
   return t('threads.fallbackTitle', { id: props.threadItem.id.slice(0, 8) })
 })
+
+const closeActions = () => {
+  isActionsOpen.value = false
+}
+
+const toggleActions = () => {
+  isActionsOpen.value = !isActionsOpen.value
+}
+
+const handleOutsideClick = (event: MouseEvent) => {
+  if (!isActionsOpen.value) return
+  const target = event.target as Node | null
+  if (target && itemRef.value && !itemRef.value.contains(target)) {
+    closeActions()
+  }
+}
+
+const handleExport = (format: ThreadExportFormat) => {
+  props.whenExportThread?.(props.threadItem.id, format)
+  closeActions()
+}
+
+const handleDelete = () => {
+  props.whenDeleteThread?.(props.threadItem.id)
+  closeActions()
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleOutsideClick)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleOutsideClick)
+})
 </script>
 
 <template>
   <div
+      ref="itemRef"
       :class="[
       'ThreadItem',
       props.isSelected && 'ThreadItem_selected'
       ]"
   >
-    <button
-        v-if="props.whenDeleteThread"
-        class="ThreadItem__delete"
-        type="button"
-        :title="$t('threads.deleteTooltip')"
-        @click.stop="props.whenDeleteThread?.(props.threadItem.id)"
-    >
-      x
-    </button>
     <div
         class="ThreadItem__content"
         @click="props.whenClickThreadItem"
@@ -66,6 +96,50 @@ const subtitle = computed(() => {
         {{ subtitle }}
       </TextView>
     </div>
+
+    <div class="ThreadItem__actions" @click.stop>
+      <button
+          class="ThreadItem__more"
+          type="button"
+          :title="$t('threads.actions.openMenu')"
+          @click="toggleActions"
+      >
+        ...
+      </button>
+      <div
+          v-if="isActionsOpen"
+          class="ThreadItem__dropdown"
+      >
+        <button
+            class="ThreadItem__dropdownItem"
+            type="button"
+            @click="handleExport('pdf')"
+        >
+          {{ $t('threads.actions.exportPdf') }}
+        </button>
+        <button
+            class="ThreadItem__dropdownItem"
+            type="button"
+            @click="handleExport('markdown')"
+        >
+          {{ $t('threads.actions.exportMarkdown') }}
+        </button>
+        <button
+            class="ThreadItem__dropdownItem"
+            type="button"
+            @click="handleExport('docx')"
+        >
+          {{ $t('threads.actions.exportDocx') }}
+        </button>
+        <button
+            class="ThreadItem__dropdownItem ThreadItem__dropdownItem_danger"
+            type="button"
+            @click="handleDelete"
+        >
+          {{ $t('threads.actions.delete') }}
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 <style lang="scss">
@@ -73,11 +147,10 @@ const subtitle = computed(() => {
   text-overflow: ellipsis;
   position: relative;
   cursor: pointer;
-  padding: 8px 32px 8px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  position: relative;
+  padding: 8px 12px 8px 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
 
 
   &__textView {
@@ -121,20 +194,63 @@ const subtitle = computed(() => {
   width: 100%;
 }
 
-.ThreadItem__delete {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  border: none;
-  background: transparent;
-  color: var(--gray_50);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 0;
-  line-height: 1;
+.ThreadItem__actions {
+  position: relative;
+  align-self: start;
 }
 
-.ThreadItem__delete:hover {
-  color: var(--error_50);
+.ThreadItem__more {
+  border: none;
+  background: transparent;
+  color: var(--gray_60);
+  cursor: pointer;
+  font-size: 18px;
+  padding: 4px 6px;
+  line-height: 1;
+  border-radius: 6px;
+}
+
+.ThreadItem__more:hover {
+  background: var(--gray_10);
+  color: var(--gray_100);
+}
+
+.ThreadItem__dropdown {
+  position: absolute;
+  right: 0;
+  margin-top: 4px;
+  background: var(--gray_0);
+  border: 1px solid var(--gray_20);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  padding: 6px 0;
+  min-width: 180px;
+  z-index: 10;
+}
+
+.ThreadItem__dropdownItem {
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--gray_80);
+  text-align: left;
+  font-family: var(--main_font);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ThreadItem__dropdownItem:hover {
+  background: var(--gray_10);
+  color: var(--gray_100);
+}
+
+.ThreadItem__dropdownItem_danger {
+  color: var(--error_60);
+}
+
+.ThreadItem__dropdownItem_danger:hover {
+  color: var(--error_70);
+  background: rgba(244, 68, 68, 0.08);
 }
 </style>
