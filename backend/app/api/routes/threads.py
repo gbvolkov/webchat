@@ -1127,12 +1127,15 @@ async def _process_message_creation(
     user_message.updated_at = utcnow()
 
     assistant_tokens = completion.usage.get("completion_tokens")
+    assistant_text = completion.content or ""
+    if not assistant_text.strip():
+        assistant_text = "(no text content)"
     assistant_message = Message(
         thread_id=thread.id,
         sender_id="assistant",
         sender_type=SenderType.ASSISTANT,
         status=MessageStatus.READY,
-        text=completion.content,
+        text=assistant_text,
         meta=completion.metadata or {},
         tokens_count=assistant_tokens,
         correlation_id=completion.response_id or None,
@@ -1442,6 +1445,11 @@ def update_message(
     user_id = current_user.user_id
     thread = _ensure_thread(session, thread_id, user_id)
     _enforce_metadata_permissions(current_user, thread.attributes)
+    if payload.text is not None and not payload.text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Text must not be empty",
+        )
     stmt = select(Message).where(Message.id == message_id, Message.thread_id == thread_id)
     message = session.exec(stmt).one_or_none()
     if message is None:
