@@ -20,7 +20,7 @@ from app.api.deps import get_chat_service, get_optional_search_index_service, ge
 from app.services.llm import ChatCompletionResult, LLMServiceError, ProviderModelCard  # noqa: E402
 from app.services.search_index import SearchMatch, SearchResultSet  # noqa: E402
 from sqlmodel import Session, select  # noqa: E402
-from app.db.models import User  # noqa: E402
+from app.db.models import Message, MessageStatus, SenderType, User  # noqa: E402
 from app.services.auth import AuthService  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 
@@ -344,6 +344,39 @@ def test_create_message_llm_failure_returns_502():
         app.dependency_overrides.pop(get_search_index_service, None)
         app.dependency_overrides.pop(get_optional_search_index_service, None)
         app.dependency_overrides.pop(get_chat_service, None)
+        engine.dispose()
+
+
+def test_list_messages_truncates_long_error_code():
+    long_error = "Agent invocation failed: " + ("x" * 200)
+    try:
+        with TestClient(app) as client:
+            user = authenticate_client(client)
+            create_resp = client.post("/api/threads", json={"title": "Long error"})
+            assert create_resp.status_code == 201, create_resp.text
+            thread_id = create_resp.json()["id"]
+
+            with Session(engine) as db:
+                message = Message(
+                    thread_id=UUID(thread_id),
+                    sender_id=str(user.id),
+                    sender_type=SenderType.USER,
+                    status=MessageStatus.ERROR,
+                    text="Error detail",
+                    error_code=long_error,
+                )
+                db.add(message)
+                db.commit()
+                db.refresh(message)
+
+            messages_resp = client.get(f"/api/threads/{thread_id}/messages")
+            assert messages_resp.status_code == 200, messages_resp.text
+            items = messages_resp.json()["items"]
+            assert len(items) == 1
+            stored_message = items[0]
+            assert stored_message["status"] == "error"
+            assert stored_message["error_code"] == long_error[:128]
+    finally:
         engine.dispose()
 
 

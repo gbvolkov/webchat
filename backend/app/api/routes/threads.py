@@ -1106,7 +1106,7 @@ async def _process_message_creation(
                 exc.extra,
             )
         user_message.status = MessageStatus.ERROR
-        user_message.error_code = error_detail
+        user_message.error_code = _truncate(error_detail, 128)
         user_message.updated_at = utcnow()
         session.add(user_message)
         thread.updated_at = utcnow()

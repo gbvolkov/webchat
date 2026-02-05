@@ -7,7 +7,7 @@ FastAPI implementation of the chat REST API described in `docs/???-???_??????_??
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scriptsctivate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8009 --reload
 ```
@@ -80,6 +80,7 @@ Every protected endpoint expects an `Authorization: Bearer <access_token>` heade
 - `DELETE /api/threads/{thread_id}` – soft delete a thread.
 - `GET /api/threads/{thread_id}/messages` – paginated messages ordered by `created_at` desc.
 - `POST /api/threads/{thread_id}/messages` – enqueue a new message (accepts both `sender_id` and `user_id`; the backend enforces the caller’s identity).
+- `POST /api/threads/{thread_id}/messages/stream` – stream assistant output over Server-Sent Events (SSE).
 - `PATCH /api/threads/{thread_id}/messages/{message_id}` – update status or text.
 
 ### Providers, models, and search
@@ -105,6 +106,43 @@ Ensure the model weights are available (the command downloads them from Hugging 
 When the `users` table is empty you can create the first account by calling `POST /api/auth/register`. Subsequent registrations require an authenticated user with the `admin` role. Tokens are signed JWTs (`CHAT_JWT_SECRET_KEY` + `CHAT_JWT_ALGORITHM`); send the access token with every request using the `Authorization: Bearer <token>` header.
 
 User records carry per-product and per-agent allow lists. When thread metadata contains `product_id` or `agent_id`, the backend enforces that the caller is allowed to interact with those resources.
+
+### Streaming responses (SSE)
+
+`POST /api/threads/{thread_id}/messages/stream` returns `text/event-stream`. Each event is a `data: <json>\n\n` line, and the stream ends with `data: [DONE]\n\n`.
+
+Behavior:
+- The backend sends an initial `queued` chunk, followed by a `running` chunk.
+- While the provider is running, it emits a `running` heartbeat every ~10 seconds.
+- Provider chunks are forwarded as-is (OpenAI-compatible `chat.completion.chunk` payloads).
+- If the provider does not end with `agent_status="completed"` or `"interrupted"`, the backend emits a final `completed` chunk.
+- On errors, it emits a `failed` chunk and a JSON error payload, then `[DONE]`.
+
+Full example stream (including a typical provider chunk with assistant content):
+
+```
+data: {"id":"<thread_id>","object":"chat.completion.chunk","agent_status":"queued","choices":[{"delta":{},"finish_reason":null}]}
+
+data: {"id":"<thread_id>","object":"chat.completion.chunk","agent_status":"running","choices":[{"delta":{},"finish_reason":null}]}
+
+data: {"id":"resp-1","object":"chat.completion.chunk","model":"theodor_agent","conversation_id":"conv-123","agent_status":"streaming","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"resp-1","object":"chat.completion.chunk","model":"theodor_agent","conversation_id":"conv-123","agent_status":"streaming","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}
+
+data: {"id":"resp-1","object":"chat.completion.chunk","model":"theodor_agent","conversation_id":"conv-123","agent_status":"completed","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}
+
+data: [DONE]
+```
+
+Failure example (error event after `failed` status):
+
+```
+data: {"id":"<thread_id>","object":"chat.completion.chunk","agent_status":"failed","choices":[{"delta":{},"finish_reason":"error"}]}
+
+data: {"error":{"message":"LLM provider error","type":"agent_error"}}
+
+data: [DONE]
+```
 
 ## Running tests
 

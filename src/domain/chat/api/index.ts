@@ -1,9 +1,16 @@
-import { DefaultAPIInstance } from '@/api/instance'
+import { API_BASE_URL, DefaultAPIInstance } from '@/api/instance'
 import { ISendMessageRequest, IModelsResponse, IAttachmentUpload } from '@/domain/chat/api/types'
 import { useAuthStore } from '@/store/auth-store'
 
 export const ChatApi = {
-    async sendMessage(threadId: string, message: string, modelId: string, modelLabel?: string, attachments?: IAttachmentUpload[]) {
+    async sendMessage(
+        threadId: string,
+        message: string,
+        modelId: string,
+        modelLabel?: string,
+        attachments?: IAttachmentUpload[],
+        options: { signal?: AbortSignal } = {},
+    ) {
         const authStore = useAuthStore()
         await authStore.ensureInitialized()
         const senderId = authStore.userId
@@ -11,7 +18,7 @@ export const ChatApi = {
             throw new Error('Unable to determine the current user. Please sign in again.')
         }
 
-        const url = `/threads/${threadId}/messages`
+        const url = `${API_BASE_URL}/threads/${threadId}/messages/stream`
         const data: ISendMessageRequest = {
             sender_id: senderId,
             sender_type: 'user',
@@ -21,7 +28,15 @@ export const ChatApi = {
             attachments,
         }
 
-        return DefaultAPIInstance.post(url, data)
+        return authStore.authorizedFetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'text/event-stream',
+            },
+            body: JSON.stringify(data),
+            signal: options.signal,
+        })
     },
 
     getModels() {

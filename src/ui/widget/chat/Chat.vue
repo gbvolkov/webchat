@@ -6,6 +6,7 @@ import type { Signals } from 'deep-chat/dist/types/handler'
 import type { MessageFile } from 'deep-chat/dist/types/messageFile'
 import { API_BASE_URL } from '@/config/api'
 import type { IAttachmentUpload } from '@/domain/chat/api/types'
+import { ChatApi } from '@/domain/chat/api'
 import { useAuthStore } from '@/store/auth-store'
 import type { TMessageContent } from './types'
 import { useI18n } from 'vue-i18n'
@@ -407,24 +408,14 @@ const sendStreamingMessage = async (
     throw new Error(t('chat.errors.unauthorized'))
   }
 
-  const requestPayload = {
-    sender_id: senderId,
-    sender_type: 'user',
-    text: textContent,
-    model: props.modelId,
-    model_label: props.modelLabel,
+  const response = await ChatApi.sendMessage(
+    threadId,
+    textContent,
+    props.modelId,
+    props.modelLabel,
     attachments,
-  }
-
-  const response = await authStore.authorizedFetch(`${API_BASE_URL}/threads/${threadId}/messages/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    },
-    body: JSON.stringify(requestPayload),
-    signal: controller.signal,
-  })
+    { signal: controller.signal },
+  )
 
   if (!response.ok) {
     let message = streamErrorMessage.value
@@ -444,6 +435,21 @@ const sendStreamingMessage = async (
   if (!bodyStream) {
     throw new Error(streamErrorMessage.value)
   }
+
+  let streamOpened = false
+  let streamClosed = false
+  const openStream = () => {
+    if (streamOpened) return
+    streamOpened = true
+    signals.onOpen()
+  }
+  const closeStream = () => {
+    if (streamClosed) return
+    streamClosed = true
+    signals.onClose()
+  }
+
+  openStream()
 
   const reader = bodyStream.getReader()
   const decoder = new TextDecoder()
@@ -585,12 +591,18 @@ const sendStreamingMessage = async (
 
   const processBuffer = async () => {
     while (!streamingFinished) {
-      const separatorIndex = buffer.indexOf('\n\n')
-      if (separatorIndex === -1) {
+      const lfIndex = buffer.indexOf('\n\n')
+      const crlfIndex = buffer.indexOf('\r\n\r\n')
+      const hasLf = lfIndex !== -1
+      const hasCrlf = crlfIndex !== -1
+      if (!hasLf && !hasCrlf) {
         return
       }
+      const useLf = hasLf && (!hasCrlf || lfIndex < crlfIndex)
+      const separatorIndex = useLf ? lfIndex : crlfIndex
+      const separatorLength = useLf ? 2 : 4
       const rawEvent = buffer.slice(0, separatorIndex)
-      buffer = buffer.slice(separatorIndex + 2)
+      buffer = buffer.slice(separatorIndex + separatorLength)
       if (!rawEvent.trim()) {
         continue
       }
@@ -641,7 +653,6 @@ const sendStreamingMessage = async (
       await ensureAssistantMessage()
     }
 
-    await signals.onResponse({})
     return true
   } finally {
     signals.stopClicked.listener = () => {}
@@ -650,6 +661,7 @@ const sendStreamingMessage = async (
     } catch {
       // ignore release failures
     }
+    closeStream()
   }
 }
 
@@ -657,6 +669,7 @@ const defineConnectFn = () => {
   if (!chatElementRef.value?.connect) return
 
   chatElementRef.value.connect = {
+    stream: true,
     handler: async (body: any, signals: Signals) => {
       if (!props.threadId) return
 

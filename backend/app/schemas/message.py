@@ -5,9 +5,18 @@ from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 
 from app.db.models import MessageStatus, SenderType
+
+
+ERROR_CODE_MAX_LENGTH = 128
+
+
+def _truncate_error_code(value: str) -> str:
+    if len(value) <= ERROR_CODE_MAX_LENGTH:
+        return value
+    return value[:ERROR_CODE_MAX_LENGTH].rstrip()
 
 
 class MessageBase(BaseModel):
@@ -17,9 +26,16 @@ class MessageBase(BaseModel):
     sender_type: SenderType = Field(default=SenderType.USER)
     status: MessageStatus = Field(default=MessageStatus.QUEUED)
     correlation_id: Optional[str] = Field(default=None, max_length=255)
-    error_code: Optional[str] = Field(default=None, max_length=128)
+    error_code: Optional[str] = Field(default=None, max_length=ERROR_CODE_MAX_LENGTH)
     tokens_count: Optional[int] = Field(default=None, ge=0)
     metadata: dict = Field(default_factory=dict, validation_alias="meta")
+
+    @field_validator("error_code", mode="before")
+    @classmethod
+    def _normalize_error_code(cls, value):
+        if isinstance(value, str):
+            return _truncate_error_code(value)
+        return value
 
 
 class MessageCreate(MessageBase):
@@ -41,9 +57,16 @@ class MessageCreate(MessageBase):
 
 class MessageUpdate(BaseModel):
     status: Optional[MessageStatus] = None
-    error_code: Optional[str] = Field(default=None, max_length=128)
+    error_code: Optional[str] = Field(default=None, max_length=ERROR_CODE_MAX_LENGTH)
     text: Optional[str] = None
     tokens_count: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("error_code", mode="before")
+    @classmethod
+    def _normalize_error_code(cls, value):
+        if isinstance(value, str):
+            return _truncate_error_code(value)
+        return value
 
 
 class MessageRead(MessageBase):
