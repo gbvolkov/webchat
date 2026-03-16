@@ -48,6 +48,7 @@ export interface MessageDTO {
     sender_type: SenderType
     status: MessageStatus
     text: string
+    metadata?: Record<string, unknown>
     tokens_count?: number | null
     error_code?: string | null
     correlation_id?: string | null

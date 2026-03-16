@@ -5,4 +5,12 @@ export enum Role {
     Ai = 'ai'
 }
 
-export type TMessageContent = Omit<MessageContent, 'role'> & { role: Role }
+export type TMessageContent = Omit<MessageContent, 'role'> & {
+    role: Role
+    id?: string
+    metadata?: Record<string, unknown>
+    createdAt?: string
+    updatedAt?: string
+    status?: string
+    correlationId?: string
+}

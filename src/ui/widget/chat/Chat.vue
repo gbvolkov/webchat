@@ -1,15 +1,17 @@
-﻿<script lang="ts" setup>
+<script lang="ts" setup>
 import 'deep-chat'
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import { Input, Modal } from 'ant-design-vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 import type { Signals } from 'deep-chat/dist/types/handler'
 import type { MessageFile } from 'deep-chat/dist/types/messageFile'
 import { API_BASE_URL } from '@/config/api'
-import type { IAttachmentUpload } from '@/domain/chat/api/types'
 import { ChatApi } from '@/domain/chat/api'
+import type { IAttachmentUpload } from '@/domain/chat/api/types'
 import { useAuthStore } from '@/store/auth-store'
-import type { TMessageContent } from './types'
 import { useI18n } from 'vue-i18n'
+import { analyzePasswordInterruptFlow, isPasswordPrompt, maskSecret } from './password-interrupt'
+import { Role, type TMessageContent } from './types'
 
 interface Props {
   history: TMessageContent[]
@@ -19,6 +21,30 @@ interface Props {
   modelLabel?: string
 }
 
+interface AttachmentUrlOptions {
+  bucket?: Set<string>
+}
+
+interface ParsedFormDataPayload {
+  text?: string
+  files: File[]
+}
+
+interface PendingSecureSubmission {
+  rawText: string
+  maskedText: string
+}
+
+interface StreamSendResult {
+  success: boolean
+  passwordPromptDetected: boolean
+}
+
+type UnknownRecord = Record<string, unknown>
+
+const InputPassword = Input.Password
+const FORM_DATA_MESSAGE_RE = /^message(\d+)$/i
+
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
@@ -26,8 +52,22 @@ const emit = defineEmits<{
 }>()
 
 const chatElementRef = ref<any>(null)
+const securePasswordInputRef = ref<{ focus?: () => void } | null>(null)
+const hydratedHistory = ref<TMessageContent[]>([])
+const maskedHistoryMessageIds = ref<Set<string>>(new Set())
+const secureModalVisible = ref(false)
+const securePasswordDraft = ref('')
+const securePromptAwaitingReply = ref(false)
+const secureReplyInFlight = ref(false)
+const secureReplyResolvedLocally = ref(false)
+const pendingSecureSubmission = ref<PendingSecureSubmission | null>(null)
+
 const authStore = useAuthStore()
 const { t, locale } = useI18n()
+
+let historyHydrationToken = 0
+const streamObjectUrls = new Set<string>()
+let activeHistoryObjectUrls = new Set<string>()
 
 const textInputPlaceholder = computed(() => {
   void locale.value
@@ -44,9 +84,130 @@ const streamErrorMessage = computed(() => {
   return t('chat.errors.stream')
 })
 
-const hydratedHistory = ref<TMessageContent[]>([])
-let historyHydrationToken = 0
+const secureModalTitle = computed(() => {
+  void locale.value
+  return t('chat.secure.title')
+})
 
+const secureModalDescription = computed(() => {
+  void locale.value
+  return t('chat.secure.description')
+})
+
+const secureModalPlaceholder = computed(() => {
+  void locale.value
+  return t('chat.secure.placeholder')
+})
+
+const secureModalSubmitLabel = computed(() => {
+  void locale.value
+  return t('chat.secure.submit')
+})
+
+const secureTriggerLabel = computed(() => {
+  void locale.value
+  return t('chat.secure.reopen')
+})
+
+const isSecureMode = computed(() => securePromptAwaitingReply.value || secureReplyInFlight.value)
+
+const isSecureSubmitDisabled = computed(
+  () => secureReplyInFlight.value || securePasswordDraft.value.length === 0,
+)
+
+const isTextInputDisabled = computed(() => Boolean(props.isLoading) || isSecureMode.value)
+
+const mixedFilesConfig = computed(() =>
+  isSecureMode.value
+    ? false
+    : { button: { position: 'inside-left', text: attachmentsButtonLabel.value } },
+)
+
+const asRecord = (value: unknown): UnknownRecord | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  return value as UnknownRecord
+}
+
+const focusSecurePasswordInput = () => {
+  void nextTick(() => {
+    securePasswordInputRef.value?.focus?.()
+  })
+}
+
+const openSecureModal = () => {
+  if (!isSecureMode.value || secureReplyInFlight.value) {
+    return
+  }
+  secureModalVisible.value = true
+  focusSecurePasswordInput()
+}
+
+const activateSecurePrompt = () => {
+  const shouldOpenModal = !securePromptAwaitingReply.value && !secureReplyInFlight.value
+  securePromptAwaitingReply.value = true
+  secureReplyResolvedLocally.value = false
+  if (shouldOpenModal) {
+    openSecureModal()
+  }
+}
+
+const resetSecureState = () => {
+  secureModalVisible.value = false
+  securePasswordDraft.value = ''
+  securePromptAwaitingReply.value = false
+  secureReplyInFlight.value = false
+  secureReplyResolvedLocally.value = false
+  pendingSecureSubmission.value = null
+}
+
+const finalizeSecureSubmission = (passwordPromptDetected: boolean) => {
+  secureReplyInFlight.value = false
+  pendingSecureSubmission.value = null
+  securePasswordDraft.value = ''
+
+  if (passwordPromptDetected) {
+    securePromptAwaitingReply.value = true
+    secureReplyResolvedLocally.value = false
+    openSecureModal()
+    return
+  }
+
+  securePromptAwaitingReply.value = false
+  secureReplyResolvedLocally.value = true
+  secureModalVisible.value = false
+}
+
+const restoreSecurePromptAfterError = () => {
+  secureReplyInFlight.value = false
+  securePromptAwaitingReply.value = true
+  secureReplyResolvedLocally.value = false
+  secureModalVisible.value = false
+  pendingSecureSubmission.value = null
+}
+
+const handleSecureModalCancel = () => {
+  if (secureReplyInFlight.value) {
+    return
+  }
+  secureModalVisible.value = false
+}
+
+const handleSecureSubmit = () => {
+  if (!props.threadId || !chatElementRef.value?.submitUserMessage || isSecureSubmitDisabled.value) {
+    return
+  }
+
+  const rawText = securePasswordDraft.value
+  pendingSecureSubmission.value = {
+    rawText,
+    maskedText: maskSecret(rawText),
+  }
+  secureReplyInFlight.value = true
+  secureModalVisible.value = false
+  chatElementRef.value.submitUserMessage({ text: pendingSecureSubmission.value.maskedText })
+}
 
 const readFileAsBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -113,7 +274,7 @@ const extractAttachments = async (sources: unknown): Promise<IAttachmentUpload[]
   const items = normalizeAttachmentSources(sources)
   if (!items.length) return []
   const uploads = await Promise.all(items.map((item) => normalizeAttachment(item)))
-  return uploads.filter((item): item is IAttachmentUpload => !!item)
+  return uploads.filter((item): item is IAttachmentUpload => Boolean(item))
 }
 
 const resolveApiBaseUrl = (): URL | null => {
@@ -134,6 +295,7 @@ const apiBaseForResolution = apiBaseUrl
     ? apiBaseUrl.toString()
     : `${apiBaseUrl.toString()}/`
   : `${window.location.origin}/`
+
 const apiOrigin = (() => {
   try {
     return new URL(apiBaseForResolution).origin
@@ -141,9 +303,6 @@ const apiOrigin = (() => {
     return window.location.origin
   }
 })()
-
-const streamObjectUrls = new Set<string>()
-let activeHistoryObjectUrls = new Set<string>()
 
 const revokeObjectUrls = (bucket: Set<string>) => {
   bucket.forEach((url) => URL.revokeObjectURL(url))
@@ -167,10 +326,6 @@ const isProtectedAttachmentUrl = (rawUrl: string): boolean => {
       return false
     }
   }
-}
-
-interface AttachmentUrlOptions {
-  bucket?: Set<string>
 }
 
 const buildAuthorizedObjectUrl = async (
@@ -197,6 +352,11 @@ const buildAuthorizedObjectUrl = async (
   }
 }
 
+const shouldMaskHistoryMessage = (message: TMessageContent): boolean => {
+  const messageId = typeof message.id === 'string' ? message.id : ''
+  return message.role === Role.User && messageId.length > 0 && maskedHistoryMessageIds.value.has(messageId)
+}
+
 const cloneMessageHistory = (source: TMessageContent[]): TMessageContent[] => {
   return source.map((message) => {
     const cloned: TMessageContent = { ...message }
@@ -207,6 +367,9 @@ const cloneMessageHistory = (source: TMessageContent[]): TMessageContent[] => {
           return { ...file }
         })
         .filter((file): file is MessageFile => Boolean(file))
+    }
+    if (typeof cloned.text === 'string' && shouldMaskHistoryMessage(cloned)) {
+      cloned.text = maskSecret(cloned.text)
     }
     return cloned
   })
@@ -260,14 +423,51 @@ const hydrateHistoryMessages = async (messages: TMessageContent[]): Promise<void
   }
 }
 
+const syncSecureStateFromHistory = (messages: TMessageContent[]) => {
+  const analysis = analyzePasswordInterruptFlow(messages)
+  maskedHistoryMessageIds.value = analysis.maskedMessageIds
+
+  if (!analysis.awaitingSecureReply) {
+    securePromptAwaitingReply.value = false
+    if (secureReplyResolvedLocally.value) {
+      secureReplyResolvedLocally.value = false
+    }
+    return
+  }
+
+  if (secureReplyResolvedLocally.value || secureReplyInFlight.value) {
+    return
+  }
+
+  if (!securePromptAwaitingReply.value) {
+    activateSecurePrompt()
+  }
+}
+
+watch(
+  () => props.threadId,
+  () => {
+    maskedHistoryMessageIds.value = new Set<string>()
+    resetSecureState()
+  },
+  { immediate: true },
+)
+
 watch(
   () => props.history,
   (next) => {
     const messages = Array.isArray(next) ? next : []
+    syncSecureStateFromHistory(messages)
     void hydrateHistoryMessages(messages)
   },
   { immediate: true },
 )
+
+watch(secureModalVisible, (isVisible) => {
+  if (isVisible) {
+    focusSecurePasswordInput()
+  }
+})
 
 const resolveAttachmentUrl = (rawUrl?: string | null): string | undefined => {
   if (!rawUrl) return undefined
@@ -287,7 +487,9 @@ const inferStreamFileType = (contentType?: string): MessageFile['type'] => {
   return 'any'
 }
 
-const normalizeStreamAttachmentFile = async (attachment: Record<string, unknown>): Promise<MessageFile | null> => {
+const normalizeStreamAttachmentFile = async (
+  attachment: Record<string, unknown>,
+): Promise<MessageFile | null> => {
   const filenameRaw = typeof attachment.filename === 'string' ? attachment.filename.trim() : ''
   const contentType = typeof attachment.content_type === 'string' ? attachment.content_type : ''
   const downloadUrl = typeof attachment.download_url === 'string' ? attachment.download_url.trim() : ''
@@ -316,13 +518,6 @@ const normalizeStreamAttachmentFile = async (attachment: Record<string, unknown>
     type: inferStreamFileType(contentType),
     src,
   }
-}
-
-const FORM_DATA_MESSAGE_RE = /^message(\d+)$/i
-
-interface ParsedFormDataPayload {
-  text?: string
-  files: File[]
 }
 
 const isFileLike = (value: unknown): value is File =>
@@ -393,13 +588,46 @@ const isFormDataPayload = (value: unknown): value is FormData => {
   )
 }
 
+const extractPayloadMetadataCandidates = (payload: UnknownRecord): UnknownRecord[] => {
+  const candidates: UnknownRecord[] = []
+  const payloadMetadata = asRecord(payload.message_metadata)
+  if (payloadMetadata) {
+    candidates.push(payloadMetadata)
+  }
+
+  const choices = Array.isArray(payload.choices) ? payload.choices : []
+  for (const choice of choices) {
+    const choiceRecord = asRecord(choice)
+    if (!choiceRecord) continue
+
+    const choiceMessageMetadata = asRecord(choiceRecord.message_metadata)
+    if (choiceMessageMetadata) {
+      candidates.push(choiceMessageMetadata)
+    }
+
+    const messageRecord = asRecord(choiceRecord.message)
+    const messageMetadata = asRecord(messageRecord?.metadata)
+    if (messageMetadata) {
+      candidates.push(messageMetadata)
+    }
+
+    const nestedMessageMetadata = asRecord(messageRecord?.message_metadata)
+    if (nestedMessageMetadata) {
+      candidates.push(nestedMessageMetadata)
+    }
+  }
+
+  return candidates
+}
+
 const sendStreamingMessage = async (
   threadId: string,
   textContent: string,
   attachments: IAttachmentUpload[],
   signals: Signals,
-): Promise<boolean> => {
+): Promise<StreamSendResult> => {
   const controller = new AbortController()
+  let passwordPromptDetected = false
   signals.stopClicked.listener = () => controller.abort()
 
   await authStore.ensureInitialized()
@@ -542,18 +770,27 @@ const sendStreamingMessage = async (
     if (payload.error && typeof payload.error === 'object') {
       const message =
         typeof payload.error.message === 'string' && payload.error.message.trim().length > 0
-            ? payload.error.message
-            : streamErrorMessage.value
+          ? payload.error.message
+          : streamErrorMessage.value
       throw new Error(message)
+    }
+
+    const payloadRecord = payload as UnknownRecord
+    const metadataCandidates = extractPayloadMetadataCandidates(payloadRecord)
+    if (metadataCandidates.some((metadata) => isPasswordPrompt(metadata))) {
+      passwordPromptDetected = true
+      if (!secureReplyInFlight.value) {
+        activateSecurePrompt()
+      }
     }
 
     let chunkHasContent = false
     let chunkHasRoleHint = false
     let chunkHasFiles = false
 
-    const metadata = (payload as Record<string, unknown>).message_metadata
-    if (metadata && typeof metadata === 'object') {
-      const attachments = (metadata as Record<string, unknown>).attachments
+    const metadata = asRecord(payloadRecord.message_metadata)
+    if (metadata) {
+      const attachments = metadata.attachments
       chunkHasFiles = (await upsertAssistantFiles(attachments)) || chunkHasFiles
     }
 
@@ -562,7 +799,8 @@ const sendStreamingMessage = async (
       if (!choice || typeof choice !== 'object') {
         continue
       }
-      const delta = (choice as Record<string, unknown>).delta as Record<string, unknown> | undefined
+      const choiceRecord = choice as Record<string, unknown>
+      const delta = choiceRecord.delta as Record<string, unknown> | undefined
       if (delta) {
         const role = delta.role
         if (typeof role === 'string' && role) {
@@ -576,9 +814,7 @@ const sendStreamingMessage = async (
         }
       }
 
-      const message = (choice as Record<string, unknown>).message as
-        | Record<string, unknown>
-        | undefined
+      const message = choiceRecord.message as Record<string, unknown> | undefined
       if (message && 'content' in message) {
         chunkHasContent = appendContent(message.content) || chunkHasContent
       }
@@ -653,7 +889,7 @@ const sendStreamingMessage = async (
       await ensureAssistantMessage()
     }
 
-    return true
+    return { success: true, passwordPromptDetected }
   } finally {
     signals.stopClicked.listener = () => {}
     try {
@@ -676,6 +912,8 @@ const defineConnectFn = () => {
       let textMessage: string | undefined
       let attachmentSources: unknown
       let shouldEmitSent = false
+      const secureSubmission = pendingSecureSubmission.value
+      const isSecureSubmission = Boolean(secureSubmission)
 
       try {
         if (isFormDataPayload(body)) {
@@ -688,24 +926,34 @@ const defineConnectFn = () => {
           attachmentSources = body?.files
         }
 
-        let preparedText = typeof textMessage === 'string' ? textMessage : ''
-        const attachments = await extractAttachments(attachmentSources)
-        if (!preparedText.trim()) {
+        let preparedText = isSecureSubmission
+          ? secureSubmission!.rawText
+          : typeof textMessage === 'string'
+            ? textMessage
+            : ''
+        const attachments = isSecureSubmission ? [] : await extractAttachments(attachmentSources)
+        if (!isSecureSubmission && !preparedText.trim()) {
           if (!attachments.length) {
             return
           }
           preparedText = 'Process as expected.'
         }
-        const success = await sendStreamingMessage(
+        const result = await sendStreamingMessage(
           props.threadId,
           preparedText,
           attachments,
           signals,
         )
-        shouldEmitSent = success
+        shouldEmitSent = result.success
+        if (isSecureSubmission) {
+          finalizeSecureSubmission(result.passwordPromptDetected)
+        }
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') {
           shouldEmitSent = false
+          if (isSecureSubmission) {
+            restoreSecurePromptAfterError()
+          }
           return
         }
 
@@ -718,6 +966,9 @@ const defineConnectFn = () => {
             : streamErrorMessage.value
         await signals.onResponse({ error: message })
         shouldEmitSent = false
+        if (isSecureSubmission) {
+          restoreSecurePromptAfterError()
+        }
       } finally {
         if (shouldEmitSent) {
           emit('messageSent')
@@ -728,6 +979,7 @@ const defineConnectFn = () => {
 }
 
 onMounted(defineConnectFn)
+
 onBeforeUnmount(() => {
   releaseSecureObjectUrls()
 })
@@ -774,62 +1026,119 @@ const userBubbleStyles: CSSProperties = {
 </script>
 
 <template>
-  <deep-chat
-    ref="chatElementRef"
-    class="Chat"
-    :connect="{}"
-    :history="hydratedHistory"
-    :introPanelStyle="introPanelStyle"
-    :textInput="{
-      styles: {
-        container: textInputContainerStyles,
-        text: textInputStyles,
-      },
-      placeholder: {
-        text: textInputPlaceholder,
-        style: inputPlaceholderStyle,
-      },
-      disabled: props.isLoading,
-    }"
-    :submit-button-styles="{
-      submit: {
-        container: {
-          default: { backgroundColor: 'initial' },
-          hover: { backgroundColor: 'initial' },
-          click: { backgroundColor: 'initial' },
+  <div class="Chat">
+    <deep-chat
+      ref="chatElementRef"
+      class="Chat__panel"
+      :connect="{}"
+      :history="hydratedHistory"
+      :introPanelStyle="introPanelStyle"
+      :textInput="{
+        styles: {
+          container: textInputContainerStyles,
+          text: textInputStyles,
         },
-        svg: {
-          content:
-            '<svg width=&quot;10&quot; height=&quot;12&quot; viewBox=&quot;0 0 10 12&quot; fill=&quot;none&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;>\n' +
-            '    <path d=&quot;M5 1.5L5 10.5M5 1.5L1 5.35714M5 1.5L9 5.35714&quot; stroke=&quot;#495B69&quot; stroke-width=&quot;1.4&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;/>\n' +
-            '</svg>\n',
+        placeholder: {
+          text: textInputPlaceholder,
+          style: inputPlaceholderStyle,
         },
-      },
-    }"
-    :mixedFiles="{ button: { position: 'inside-left', text: attachmentsButtonLabel } }"
-    :messageStyles="{
-      default: {
-        ai: {
-          bubble: aiBubbleStyles,
+        disabled: isTextInputDisabled,
+      }"
+      :submit-button-styles="{
+        submit: {
+          container: {
+            default: { backgroundColor: 'initial' },
+            hover: { backgroundColor: 'initial' },
+            click: { backgroundColor: 'initial' },
+          },
+          svg: {
+            content:
+              '<svg width=&quot;10&quot; height=&quot;12&quot; viewBox=&quot;0 0 10 12&quot; fill=&quot;none&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;>\n' +
+              '    <path d=&quot;M5 1.5L5 10.5M5 1.5L1 5.35714M5 1.5L9 5.35714&quot; stroke=&quot;#495B69&quot; stroke-width=&quot;1.4&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;/>\n' +
+              '</svg>\n',
+          },
         },
-        user: {
-          bubble: userBubbleStyles,
+      }"
+      :mixedFiles="mixedFilesConfig"
+      :messageStyles="{
+        default: {
+          ai: {
+            bubble: aiBubbleStyles,
+          },
+          user: {
+            bubble: userBubbleStyles,
+          },
         },
-      },
-    }"
-  >
-    <slot />
-  </deep-chat>
+      }"
+    >
+      <slot />
+    </deep-chat>
+
+    <button
+      v-if="securePromptAwaitingReply && !secureModalVisible && !secureReplyInFlight"
+      type="button"
+      class="Chat__secureTrigger"
+      @click="openSecureModal"
+    >
+      {{ secureTriggerLabel }}
+    </button>
+
+    <Modal
+      :open="secureModalVisible"
+      :title="secureModalTitle"
+      :ok-text="secureModalSubmitLabel"
+      :cancel-text="$t('common.actions.cancel')"
+      :confirm-loading="secureReplyInFlight"
+      :ok-button-props="{ disabled: isSecureSubmitDisabled }"
+      :mask-closable="!secureReplyInFlight"
+      :keyboard="!secureReplyInFlight"
+      :closable="!secureReplyInFlight"
+      @ok="handleSecureSubmit"
+      @cancel="handleSecureModalCancel"
+    >
+      <p class="Chat__secureDescription">{{ secureModalDescription }}</p>
+      <InputPassword
+        ref="securePasswordInputRef"
+        v-model:value="securePasswordDraft"
+        :placeholder="secureModalPlaceholder"
+        :disabled="secureReplyInFlight"
+        @pressEnter="handleSecureSubmit"
+      />
+    </Modal>
+  </div>
 </template>
 
 <style lang="scss" scoped>
 .Chat {
+  width: 100%;
+  height: 100%;
+}
+
+.Chat__panel {
   width: 100% !important;
   height: 100% !important;
   border: none !important;
 }
+
+.Chat__secureTrigger {
+  margin-top: 12px;
+  padding: 8px 14px;
+  border: 1px solid var(--gray_20);
+  border-radius: 8px;
+  background-color: var(--gray_0);
+  color: var(--gray_90);
+  font-family: var(--main_font);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.Chat__secureTrigger:hover {
+  border-color: var(--gray_30);
+}
+
+.Chat__secureDescription {
+  margin: 0 0 12px;
+  color: var(--gray_70);
+  font-family: var(--main_font);
+}
 </style>
-
-
-
-

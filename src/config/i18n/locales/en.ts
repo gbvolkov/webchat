@@ -49,6 +49,13 @@
       placeholder: 'Type a message...',
       attachments: 'Files',
     },
+    secure: {
+      title: 'Password required',
+      description: 'Enter the password in the protected field. It will be hidden in the chat history.',
+      placeholder: 'Enter password',
+      submit: 'Send password',
+      reopen: 'Enter password',
+    },
     errors: {
       stream: 'Error, please try again.',
     unauthorized: 'Unable to determine the current user. Please sign in again.',

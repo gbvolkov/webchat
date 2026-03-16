@@ -40,6 +40,7 @@ export const mapThreadInfoToMessageContent = (threadInfo: MessageDTO[]): TMessag
         .map((message) => ({
             id: message.id,
             text: message.text,
+            metadata: message.metadata,
             createdAt: message.created_at,
             updatedAt: message.updated_at,
             role: ROLE_MAPPER[message.sender_type] ?? Role.User,
