@@ -1,0 +1,35 @@
+﻿<!doctype html>
+<html>
+<body>
+  <deep-chat id="chat"></deep-chat>
+  <script type="module">
+    import 'http://127.0.0.1:41731/node_modules/deep-chat/dist/deepChat.js';
+    const chat = document.getElementById('chat');
+    chat.style.width = '800px';
+    chat.style.height = '600px';
+    chat.history = [];
+    chat.connect = {
+      stream: true,
+      handler: async (_body, signals) => {
+        await signals.onOpen();
+        await signals.onResponse({ role: 'assistant', text: 'Здравствуйте. Помогу быстро понять, какие решения ГАЗ подойдут под вашу задачу и какие есть финансовые варианты.' });
+        await signals.onClose();
+        setTimeout(() => {
+          chat.history = [
+            { role: 'user', text: 'Привет!' },
+            { role: 'assistant', text: 'Здравствуйте. Помогу быстро понять, какие решения ГАЗ подойдут под вашу задачу и какие есть финансовые варианты.' }
+          ];
+        }, 200);
+        setTimeout(() => {
+          const root = chat.shadowRoot;
+          const bubbles = root ? root.querySelectorAll('.message-bubble') : [];
+          const texts = [...bubbles].map((el) => el.textContent.trim());
+          document.body.setAttribute('data-bubble-count', String(bubbles.length));
+          document.body.setAttribute('data-bubbles', JSON.stringify(texts));
+        }, 900);
+      }
+    };
+    setTimeout(() => chat.submitUserMessage({ text: 'Привет!' }), 100);
+  </script>
+</body>
+</html>

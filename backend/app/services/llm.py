@@ -951,20 +951,24 @@ class _StreamingCompletionParser:
             for choice in choices:
                 if not isinstance(choice, dict):
                     continue
+                delta_has_content = False
                 delta = choice.get("delta")
                 if isinstance(delta, dict):
                     role = delta.get("role")
                     if isinstance(role, str):
                         self._role = role
                         self._trace("Updated streaming role via delta=%s", self._role)
-                    self._ingest_content(delta.get("content"))
+                    if "content" in delta:
+                        delta_has_content = True
+                        self._ingest_content(delta.get("content"))
                 message = choice.get("message")
                 if isinstance(message, dict):
                     role = message.get("role")
                     if isinstance(role, str):
                         self._role = role
                         self._trace("Updated streaming role via message=%s", self._role)
-                    self._ingest_content(message.get("content"))
+                    if not delta_has_content:
+                        self._ingest_content(message.get("content"))
                 finish_reason = choice.get("finish_reason")
                 if isinstance(finish_reason, str):
                     self._finish_reason = finish_reason

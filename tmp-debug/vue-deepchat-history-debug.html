@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vue Deep Chat History Debug</title>
+    <script src="/node_modules/vue/dist/vue.global.prod.js"></script>
+    <script type="module" src="/node_modules/deep-chat/dist/deepChat.js"></script>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 0;
+        padding: 16px;
+      }
+      deep-chat {
+        width: 700px;
+        height: 600px;
+        border: 1px solid #ccc;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <deep-chat
+        ref="chat"
+        :connect="{}"
+        :history="hydratedHistory"
+      ></deep-chat>
+      <pre id="log">{{ logs.join('\n') }}</pre>
+    </div>
+
+    <script>
+      const { createApp, nextTick } = Vue
+
+      const baseMessages = [
+        { role: 'ai', text: 'Здравствуйте. Помогу быстро понять, какие решения ГАЗ подойдут под вашу задачу и какие есть финансовые варианты.' },
+      ]
+
+      createApp({
+        data() {
+          return {
+            hydratedHistory: [],
+            logs: [],
+            renderCount: 0,
+          }
+        },
+        methods: {
+          log(message) {
+            this.logs.push(`${new Date().toISOString()} ${message}`)
+            console.log(message)
+          },
+          setHistory(label, messages) {
+            this.hydratedHistory = messages.map((m) => ({ ...m }))
+            this.log(`history set: ${label}, size=${this.hydratedHistory.length}`)
+          },
+          snapshot(label) {
+            const root = this.$refs.chat?.shadowRoot
+            const bubbles = root
+              ? [...root.querySelectorAll('.message-bubble')]
+                  .map((el) => el.textContent?.trim() || '')
+                  .filter(Boolean)
+              : []
+            this.log(`snapshot ${label}: bubbles=${bubbles.length} => ${JSON.stringify(bubbles)}`)
+          },
+        },
+        async mounted() {
+          this.$refs.chat.addEventListener('render', () => {
+            this.renderCount += 1
+            this.log(`deep-chat render #${this.renderCount}`)
+          })
+
+          this.$refs.chat.connect = {
+            stream: true,
+            handler: async (_body, signals) => {
+              await signals.onResponse({
+                role: 'assistant',
+                text: 'STREAMED ANSWER',
+              })
+            },
+          }
+          this.log('manual connect handler set')
+
+          this.setHistory('initial', baseMessages)
+          await nextTick()
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          this.snapshot('after initial')
+
+          this.setHistory('placeholder', baseMessages)
+          await nextTick()
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          this.snapshot('after placeholder')
+
+          this.setHistory('final', baseMessages)
+          await nextTick()
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          this.snapshot('after final')
+
+          this.setHistory('same again', baseMessages)
+          await nextTick()
+          await new Promise((resolve) => setTimeout(resolve, 50))
+          this.snapshot('after same again')
+
+          window.__chatDebug = this
+        },
+      }).mount('#app')
+    </script>
+  </body>
+</html>

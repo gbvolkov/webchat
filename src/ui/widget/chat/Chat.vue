@@ -117,12 +117,6 @@ const isSecureSubmitDisabled = computed(
 
 const isTextInputDisabled = computed(() => Boolean(props.isLoading) || isSecureMode.value)
 
-const mixedFilesConfig = computed(() =>
-  isSecureMode.value
-    ? false
-    : { button: { position: 'inside-left', text: attachmentsButtonLabel.value } },
-)
-
 const asRecord = (value: unknown): UnknownRecord | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined
@@ -375,26 +369,10 @@ const cloneMessageHistory = (source: TMessageContent[]): TMessageContent[] => {
   })
 }
 
-const buildHistoryPlaceholder = (source: TMessageContent[]): TMessageContent[] => {
-  return cloneMessageHistory(source).map((message) => {
-    if (!Array.isArray(message.files) || message.files.length === 0) {
-      return message
-    }
-    const visibleFiles = message.files.filter((file) => {
-      if (!file || typeof file.src !== 'string' || !file.src) return false
-      return !isProtectedAttachmentUrl(file.src)
-    })
-    message.files = visibleFiles.length > 0 ? visibleFiles : undefined
-    return message
-  })
-}
-
 const hydrateHistoryMessages = async (messages: TMessageContent[]): Promise<void> => {
   const hydrationId = ++historyHydrationToken
   const cloned = cloneMessageHistory(messages)
   const pendingUrls = new Set<string>()
-  const placeholder = buildHistoryPlaceholder(messages)
-  hydratedHistory.value = placeholder
 
   try {
     await Promise.all(
@@ -423,6 +401,14 @@ const hydrateHistoryMessages = async (messages: TMessageContent[]): Promise<void
   }
 }
 
+const applyHydratedHistoryToChat = (messages: TMessageContent[]) => {
+  if (!chatElementRef.value) {
+    return
+  }
+
+  chatElementRef.value.history = cloneMessageHistory(messages)
+}
+
 const syncSecureStateFromHistory = (messages: TMessageContent[]) => {
   const analysis = analyzePasswordInterruptFlow(messages)
   maskedHistoryMessageIds.value = analysis.maskedMessageIds
@@ -447,8 +433,12 @@ const syncSecureStateFromHistory = (messages: TMessageContent[]) => {
 watch(
   () => props.threadId,
   () => {
+    historyHydrationToken += 1
     maskedHistoryMessageIds.value = new Set<string>()
+    hydratedHistory.value = []
+    releaseSecureObjectUrls()
     resetSecureState()
+    applyHydratedHistoryToChat([])
   },
   { immediate: true },
 )
@@ -468,6 +458,14 @@ watch(secureModalVisible, (isVisible) => {
     focusSecurePasswordInput()
   }
 })
+
+watch(
+  hydratedHistory,
+  (nextHistory) => {
+    applyHydratedHistoryToChat(nextHistory)
+  },
+  { immediate: true },
+)
 
 const resolveAttachmentUrl = (rawUrl?: string | null): string | undefined => {
   if (!rawUrl) return undefined
@@ -801,6 +799,7 @@ const sendStreamingMessage = async (
       }
       const choiceRecord = choice as Record<string, unknown>
       const delta = choiceRecord.delta as Record<string, unknown> | undefined
+      const hasDeltaContent = Boolean(delta && 'content' in delta)
       if (delta) {
         const role = delta.role
         if (typeof role === 'string' && role) {
@@ -815,7 +814,7 @@ const sendStreamingMessage = async (
       }
 
       const message = choiceRecord.message as Record<string, unknown> | undefined
-      if (message && 'content' in message) {
+      if (!hasDeltaContent && message && 'content' in message) {
         chunkHasContent = appendContent(message.content) || chunkHasContent
       }
     }
@@ -902,7 +901,7 @@ const sendStreamingMessage = async (
 }
 
 const defineConnectFn = () => {
-  if (!chatElementRef.value?.connect) return
+  if (!chatElementRef.value) return
 
   chatElementRef.value.connect = {
     stream: true,
@@ -978,8 +977,6 @@ const defineConnectFn = () => {
   }
 }
 
-onMounted(defineConnectFn)
-
 onBeforeUnmount(() => {
   releaseSecureObjectUrls()
 })
@@ -1023,54 +1020,97 @@ const userBubbleStyles: CSSProperties = {
   color: 'var(--gray_100)',
   borderRadius: '8px',
 }
+
+const submitButtonStyles = {
+  submit: {
+    container: {
+      default: { backgroundColor: 'initial' },
+      hover: { backgroundColor: 'initial' },
+      click: { backgroundColor: 'initial' },
+    },
+    svg: {
+      content:
+        '<svg width=&quot;10&quot; height=&quot;12&quot; viewBox=&quot;0 0 10 12&quot; fill=&quot;none&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;>\n' +
+        '    <path d=&quot;M5 1.5L5 10.5M5 1.5L1 5.35714M5 1.5L9 5.35714&quot; stroke=&quot;#495B69&quot; stroke-width=&quot;1.4&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;/>\n' +
+        '</svg>\n',
+    },
+  },
+}
+
+const messageStyles = {
+  default: {
+    ai: {
+      bubble: aiBubbleStyles,
+    },
+    user: {
+      bubble: userBubbleStyles,
+    },
+  },
+}
+
+const deepChatTextInputConfig = {
+  styles: {
+    container: textInputContainerStyles,
+    text: textInputStyles,
+  },
+  placeholder: {
+    text: '',
+    style: inputPlaceholderStyle,
+  },
+  disabled: false,
+}
+
+const deepChatMixedFilesConfig = {
+  button: {
+    position: 'inside-left',
+    text: '',
+  },
+}
+
+const applyTextInputConfig = () => {
+  deepChatTextInputConfig.placeholder.text = textInputPlaceholder.value
+  deepChatTextInputConfig.disabled = isTextInputDisabled.value
+  if (!chatElementRef.value) {
+    return
+  }
+  chatElementRef.value.textInput = deepChatTextInputConfig
+}
+
+const applyMixedFilesConfig = () => {
+  deepChatMixedFilesConfig.button.text = attachmentsButtonLabel.value
+  if (!chatElementRef.value) {
+    return
+  }
+  chatElementRef.value.mixedFiles = isSecureMode.value ? false : deepChatMixedFilesConfig
+}
+
+watch([textInputPlaceholder, isTextInputDisabled], () => {
+  applyTextInputConfig()
+})
+
+watch([attachmentsButtonLabel, isSecureMode], () => {
+  applyMixedFilesConfig()
+})
+
+onMounted(() => {
+  if (!chatElementRef.value) {
+    return
+  }
+
+  chatElementRef.value.introPanelStyle = introPanelStyle
+  chatElementRef.value.submitButtonStyles = submitButtonStyles
+  chatElementRef.value.messageStyles = messageStyles
+
+  defineConnectFn()
+  applyTextInputConfig()
+  applyMixedFilesConfig()
+  applyHydratedHistoryToChat(hydratedHistory.value)
+})
 </script>
 
 <template>
   <div class="Chat">
-    <deep-chat
-      ref="chatElementRef"
-      class="Chat__panel"
-      :connect="{}"
-      :history="hydratedHistory"
-      :introPanelStyle="introPanelStyle"
-      :textInput="{
-        styles: {
-          container: textInputContainerStyles,
-          text: textInputStyles,
-        },
-        placeholder: {
-          text: textInputPlaceholder,
-          style: inputPlaceholderStyle,
-        },
-        disabled: isTextInputDisabled,
-      }"
-      :submit-button-styles="{
-        submit: {
-          container: {
-            default: { backgroundColor: 'initial' },
-            hover: { backgroundColor: 'initial' },
-            click: { backgroundColor: 'initial' },
-          },
-          svg: {
-            content:
-              '<svg width=&quot;10&quot; height=&quot;12&quot; viewBox=&quot;0 0 10 12&quot; fill=&quot;none&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;>\n' +
-              '    <path d=&quot;M5 1.5L5 10.5M5 1.5L1 5.35714M5 1.5L9 5.35714&quot; stroke=&quot;#495B69&quot; stroke-width=&quot;1.4&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;/>\n' +
-              '</svg>\n',
-          },
-        },
-      }"
-      :mixedFiles="mixedFilesConfig"
-      :messageStyles="{
-        default: {
-          ai: {
-            bubble: aiBubbleStyles,
-          },
-          user: {
-            bubble: userBubbleStyles,
-          },
-        },
-      }"
-    >
+    <deep-chat ref="chatElementRef" class="Chat__panel">
       <slot />
     </deep-chat>
 

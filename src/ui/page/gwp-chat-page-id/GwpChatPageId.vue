@@ -5,7 +5,7 @@ import { message } from 'ant-design-vue'
 import { isAxiosError } from 'axios'
 import { useAuthStore } from '@/store/auth-store'
 import { mapThreadInfoToMessageContent } from '@/domain/threads/mapper'
-import type { MessageDTO } from '@/domain/threads/types'
+import type { MessageDTO, ThreadDetail } from '@/domain/threads/types'
 import { useRoute } from 'vue-router'
 import { Chat } from '@/ui/widget/chat'
 import { ThreadsApi } from '@/domain/threads/api'
@@ -72,6 +72,75 @@ const loadAllThreadMessages = async (threadId: string, pageSize = 100, maxPages 
   return mapThreadInfoToMessageContent(collected)
 }
 
+const stableSerialize = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(',')}]`
+  }
+
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      .map(([key, nestedValue]) => `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`)
+      .join(',')}}`
+  }
+
+  const serialized = JSON.stringify(value)
+  return serialized ?? 'null'
+}
+
+const dedupeMessagesById = (messages: TMessageContent[]): TMessageContent[] => {
+  const deduped: TMessageContent[] = []
+  const seenIds = new Set<string>()
+
+  for (const messageItem of messages) {
+    const messageId = typeof messageItem.id === 'string' ? messageItem.id : ''
+    if (messageId) {
+      if (seenIds.has(messageId)) {
+        continue
+      }
+      seenIds.add(messageId)
+    }
+    deduped.push(messageItem)
+  }
+
+  return deduped
+}
+
+const areMessageListsEquivalent = (left: TMessageContent[], right: TMessageContent[]): boolean => {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (stableSerialize(left[index]) !== stableSerialize(right[index])) {
+      return false
+    }
+  }
+
+  return true
+}
+
+const applyMessageHistory = (messages: TMessageContent[]) => {
+  const dedupedMessages = dedupeMessagesById(messages)
+  if (areMessageListsEquivalent(messageHistory.value, dedupedMessages)) {
+    return
+  }
+  messageHistory.value = dedupedMessages
+}
+
+const applyThreadMetadata = (thread: ThreadDetail) => {
+  threadMetadata.value = (thread.metadata ?? {}) as Record<string, unknown>
+
+  const newTitle = (thread.title as string | undefined) ?? ''
+  if (newTitle !== currentThreadTitle.value) {
+    currentThreadTitle.value = newTitle
+    window.dispatchEvent(new CustomEvent('threads:refresh'))
+  }
+
+  const metadataModel = threadMetadata.value?.['model']
+  ensureSelectedModel(typeof metadataModel === 'string' ? metadataModel : undefined)
+}
+
 const ensureSelectedModel = (preferred?: string | null) => {
   if (typeof preferred === 'string' && preferred.length > 0) {
     if (!availableModels.value.some((model) => model.id === preferred)) {
@@ -135,7 +204,7 @@ const loadModels = async () => {
 const loadThreadData = async () => {
   if (!chatId.value) {
     componentStatus.value = ComponentStatus.RESULT
-    messageHistory.value = []
+    applyMessageHistory([])
     return
   }
 
@@ -148,26 +217,15 @@ const loadThreadData = async () => {
       threadRequest,
     ])
 
-    messageHistory.value = messages
-    threadMetadata.value = (threadResponse.data.metadata ?? {}) as Record<string, unknown>
-
-    const newTitle = (threadResponse.data.title as string | undefined) ?? ''
-    if (newTitle && newTitle !== currentThreadTitle.value) {
-      currentThreadTitle.value = newTitle
-      window.dispatchEvent(new CustomEvent('threads:refresh'))
-    } else if (!newTitle) {
-      currentThreadTitle.value = ''
-    }
-
-    const metadataModel = threadMetadata.value?.['model']
-    ensureSelectedModel(typeof metadataModel === 'string' ? metadataModel : undefined)
+    applyMessageHistory(messages)
+    applyThreadMetadata(threadResponse.data)
 
     componentStatus.value = ComponentStatus.RESULT
     hasLoadedThread.value = true
   } catch (error) {
     if (isAxiosError(error) && error.response?.status === 404) {
       console.warn('Thread not found yet, showing empty state')
-      messageHistory.value = []
+      applyMessageHistory([])
       threadMetadata.value = {}
       currentThreadTitle.value = ''
       ensureSelectedModel()
@@ -184,6 +242,23 @@ const loadThreadData = async () => {
     if (!hasLoadedThread.value) {
       hasLoadedThread.value = true
     }
+  }
+}
+
+const handleMessageSent = async () => {
+  const threadId = chatId.value
+  if (!threadId) {
+    return
+  }
+
+  try {
+    const { data } = await ThreadsApi.getThread(threadId)
+    if (chatId.value !== threadId) {
+      return
+    }
+    applyThreadMetadata(data)
+  } catch (error) {
+    console.error('Failed to refresh thread metadata after message send', error)
   }
 }
 
@@ -261,7 +336,7 @@ watch(availableModels, () => {
       :is-loading="isLoading"
       :model-id="selectedModel"
       :model-label="selectedModelOption?.label || selectedModel"
-      @messageSent="loadThreadData"
+      @messageSent="handleMessageSent"
   >
     <div
         v-if="isLoading && hasLoadedThread"
