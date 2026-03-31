@@ -1030,8 +1030,8 @@ const submitButtonStyles = {
     },
     svg: {
       content:
-        '<svg width=&quot;10&quot; height=&quot;12&quot; viewBox=&quot;0 0 10 12&quot; fill=&quot;none&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;>\n' +
-        '    <path d=&quot;M5 1.5L5 10.5M5 1.5L1 5.35714M5 1.5L9 5.35714&quot; stroke=&quot;#495B69&quot; stroke-width=&quot;1.4&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;/>\n' +
+        '<svg width="10" height="12" viewBox="0 0 10 12" fill="none" xmlns="http://www.w3.org/2000/svg">\n' +
+        '    <path d="M5 1.5L5 10.5M5 1.5L1 5.35714M5 1.5L9 5.35714" stroke="#495B69" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>\n' +
         '</svg>\n',
     },
   },
